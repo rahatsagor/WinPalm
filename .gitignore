@@ -1,0 +1,21 @@
+# Source lives here; all local output belongs in ../winpalm-dev/.
+/target/
+/build/
+/dist/
+/web/node_modules
+/web/dist/
+/windows/**/bin/
+/windows/**/obj/
+*.log
+*.user
+*.suo
+*.pfx
+*.p12
+*.key
+*.pem
+.env*
+.DS_Store
+.idea/
+.vscode/
+/coverage/
+/web/coverage/

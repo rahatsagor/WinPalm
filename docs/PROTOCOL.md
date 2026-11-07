@@ -1,0 +1,305 @@
+# Wire protocol
+
+The phone app and the PC talk over one WebSocket. This page describes
+protocol version **1**. The definitions live in
+[`core/src/protocol.rs`](../core/src/protocol.rs) and are mirrored in
+[`web/src/lib/protocol.ts`](../web/src/lib/protocol.ts).
+
+## Transport
+
+The PC listens on one TCP port (8790 by default, or the next free port if
+that one is taken). The same port serves plain HTTP and TLS; the server looks
+at the first byte of each connection to tell them apart.
+
+| Path | Purpose |
+| --- | --- |
+| `/` and other paths | The phone app (static files). |
+| `/ws` | The WebSocket. The `Origin` header, when present, must match `Host` (see below for proxies). |
+| `/api/info` | `{"name", "version", "protocol", "secure"}`. No authentication. |
+| `/api/icon?id=<catalog id>&size=<px>&k=<session key>` | App icon as PNG, 64 to 512 px. Needs the `sessionKey` from `welcome`. |
+| `/winpalm.crt` | The PC's certificate authority (DER), for installing on the phone. |
+
+Only `GET` and `HEAD` without a body are accepted, and `/ws` needs `GET`. The `Host` header must be present and be
+an IP address, `localhost`, a single-label name, a name under `.local`,
+`.home.arpa` or `.internal`, or the host of the custom pairing address set on
+the PC. Anything else gets `421`,
+so a website can't reach the server through DNS rebinding. Messages are
+limited to 1 MiB.
+
+When **Accept connections through a proxy on this PC** is on, a reverse
+proxy on the PC itself may connect over loopback. For loopback connections
+with `X-Forwarded-For`, the server
+takes the client address from its last entry (with or without a port), treats `X-Forwarded-Proto:
+https` as encrypted, and checks `X-Forwarded-Host` (or `Host`) in place of
+`Host`, including for the WebSocket `Origin` check. The forwarded headers are
+ignored otherwise, and always on connections from other machines. The app must
+be served from `/`.
+
+Text frames carry JSON objects with a `t` field naming the message type.
+Field names are camelCase. Pointer data uses binary frames.
+
+## Session
+
+```text
+phone                          PC
+  │ hello ───────────────────▶ │
+  │                            │  checks token / code / PIN,
+  │ ◀─────────────── pending   │  or asks the person at the PC
+  │ ◀── welcome  (or denied)   │
+  │ ping ──▶  ◀── pong         │  every 2 s
+  │ input, actions ──▶         │
+  │ ◀── state updates          │
+  │ ◀── bye                    │  disconnected, removed, shutting down
+```
+
+The first message must be `hello`, within 10 seconds:
+
+```json
+{
+  "t": "hello",
+  "v": 1,
+  "device": { "id": "uuid", "name": "Living room iPhone", "model": "iPhone" },
+  "auth": { "method": "token", "token": "…" },
+  "remember": true
+}
+```
+
+`device.id` is a stable random ID of up to 128 printable ASCII characters
+without spaces; the phone app uses a UUID. Other IDs are `denied` as
+`incompatible`.
+
+`auth.method` is one of:
+
+| Method | Fields | Meaning |
+| --- | --- | --- |
+| `token` | `token` | Reconnect with the token issued at pairing. |
+| `pair` | `code` | The single-use code from the QR link (`/#pair=<code>`). |
+| `pin` | `pin` | The six-digit PIN shown on the PC. It works only while the PC shows it, and for three minutes after. |
+| `approve` | | Ask the person at the PC to accept. The PC replies `pending` and waits up to two minutes. |
+
+On success the PC sends `welcome`:
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Protocol version. |
+| `host` | `{name, version, os}`. |
+| `sessionKey` | Short-lived key for `/api/icon`. |
+| `token` | Present after a new pairing with `remember: true`. Store it and use it for `token` auth. |
+| `features` | `{voice, shell, secure, permission}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level. |
+| `deck` | The current deck (see below). |
+| `layout` | The PC's keyboard layout, if known. |
+| `volume` | `{value: 0–1, muted}`, if the output device has a volume control. |
+| `capsLock` | Whether Caps Lock is on. |
+| `paused` | Input is paused on the PC. |
+| `settings` | `{settings, updatedAt}`: the settings this device saved with `settingsSave`, if the PC has any (see [Phone settings](#phone-settings)). |
+
+Otherwise the PC sends `denied` and closes the connection:
+
+| `reason` | Meaning |
+| --- | --- |
+| `unknown` | The token is unknown or was revoked. Pair again. |
+| `wrongPin` | The PIN is wrong, or it changed since the phone saw it. |
+| `pinClosed` | The PIN isn't shown on the PC right now. Open the WinPalm menu on the PC and try again. Not counted as a wrong attempt. |
+| `expiredCode` | The QR code is wrong, expired or already used. |
+| `rejected` | The person at the PC declined or didn't answer in time, or this pairing method is turned off. |
+| `blocked` | Too many wrong PINs, or too many approval requests declined, unanswered or abandoned. `retryAfter` gives seconds to wait. |
+| `busy` | Too many approval requests are already waiting. |
+| `incompatible` | Unsupported protocol version or invalid device info. |
+
+The phone sends `ping` (`{"t":"ping","id":n}`) every two seconds and the PC
+answers `pong` with the same `id`. A connection silent for 8 seconds is
+treated as gone, and everything that device was holding (keys, buttons) is
+released. Before that, a held key stops repeating after 3 seconds without any
+message, and held keys and buttons are released after 6.
+
+## Phone → PC
+
+### Input
+
+Key codes are the stable CmdPalm wire positions, **not Windows virtual-key codes**.
+`core/src/input/windows_keys.rs` maps them to Windows set-1 scan codes. Modifiers are
+a bitmask:
+
+| Bit | Modifier |
+| --- | --- |
+| 1 | Windows logo |
+| 2 | Shift |
+| 4 | Alt |
+| 8 | Ctrl |
+| 16 | Local function-row modifier; Windows has no universal Fn scan code |
+| 256 | Right Windows logo |
+| 512 | Right Shift |
+| 1024 | Right Alt (AltGr on layouts that have it) |
+| 2048 | Right Ctrl |
+
+A plain modifier bit is satisfied by either side's key when one is already
+held, and otherwise presses the left key. A right-side bit presses that exact
+key, for apps and tools that tell the two apart, such as AutoHotkey hotkeys on
+right Ctrl. Deck actions use the plain bits only. The PC ignores a message with
+any other bit.
+
+| Message | Fields | Meaning |
+| --- | --- | --- |
+| `key` | `code`, `down`, `mods`, `repeat` (default true) | Press or release a key. `mods` are held only around this key. The PC repeats held keys at its own repeat rate unless `repeat` is false. |
+| `tap` | `code`, `mods` | Press and release as one combo. Use this for shortcuts so a lost packet can't leave a modifier stuck. |
+| `button` | `button`, `op`, `mods` | Mouse button `left`, `right`, `middle`, `back` or `forward`; `op` is `down`, `up` or `click`. |
+| `media` | `key`, `op` | `volumeUp`, `volumeDown`, `mute`, `brightnessUp`, `brightnessDown`, `playPause`, `next`, `previous`, `fastForward`, `rewind`, `illuminationUp`, `illuminationDown`, `illuminationToggle`. |
+| `text` | `text`, `mode` | Type text, up to 64 KiB; longer text gets a `notice` with code `tooLong`. `mode` is `unicode` (default), `keystrokes` (real key presses through the PC's layout) or `paste`. |
+| `edit` | `delete`, `insert` | Delete characters before the caret (at most 4 096), then type `insert` (up to 64 KiB; longer gets a `notice` with code `tooLong`). Used for live typing and autocorrect. |
+| `release` | | Release everything this device holds. |
+
+### Binary frames
+
+Little-endian. The first byte is the type.
+
+| Byte | Layout | Meaning |
+| --- | --- | --- |
+| `0x01` | `dx: f32, dy: f32` | Move the pointer by this many points. |
+| `0x02` | `phase: u8, dx: f32, dy: f32` | Scroll by pixels. Phases: 0 none (a plain wheel step), 1 began, 2 changed, 4 ended, 8 cancelled. A new `began` ends a gesture still in progress. |
+| `0x03` | `vx: f32, vy: f32` | Fingers lifted while scrolling at this velocity (px/s). The PC continues with momentum. |
+| `0x04` | | A finger touched the surface; stops momentum. |
+| `0x05` | `kind: u8, phase: u8, value: f32` | A pinch for apps to handle. Kind 1 is zoom: `value` is the change in magnification, as a fraction, and phases are as for scrolling. The PC holds Ctrl and sends fine wheel steps, as a precision touchpad does, and ends a zoom that stops getting updates for a second. Kinds 2 (rotate) and 3 (smart zoom) are CmdPalm's; Windows has no system-wide equivalent, so the PC ignores them and the phone never sends them. |
+| `0x10` | `pcm: i16…` | Microphone audio for voice typing: 16 kHz, mono. |
+
+### Actions
+
+`{"t":"action","action":{…},"id":n}` runs an action. If `id` is given, the PC
+answers with `actionResult` (`{id, ok, message?}`). A failed action without an
+`id` still gets an `actionResult`, with no `id`, and so does an action the PC
+can't read. Actions are the same objects deck buttons store, tagged by `kind`:
+
+| `kind` | Fields |
+| --- | --- |
+| `keys` | `code`, `mods`, `char` (optional letter, so the shortcut follows the key with that label on non-QWERTY layouts) |
+| `text` | `text`, `enter` |
+| `media` | `key` |
+| `app` | `id` (opaque catalog identifier), `op`: `open`, `toggle`, `hide`, `quit` |
+| `url` | `url`, with surrounding spaces ignored. `http:`, `https:` and `mailto:` work normally; other schemes require shell permission. `javascript:` and `data:` are always refused |
+| `system` | `name`, e.g. `missionControl`, `launchpad`, `lockScreen`, `screenshotArea`; see `SystemAction` |
+| `shortcut` | `name` of an owner-configured PowerShell automation; shell permission is required |
+| `shell` | `command`; refused unless allowed on the PC. Pause, disconnect, turning shell commands off, or a five-minute timeout terminates a running command's Windows job and its descendants. Programs a finished command started keep running. At most 32 commands are watched at once. |
+| `mouse` | `button`, `clicks` |
+| `delay` | `ms`, up to 10 000 |
+| `sequence` | `steps`: up to 64 actions, nested at most 3 deep |
+
+### Other requests
+
+| Message | Fields | Reply |
+| --- | --- | --- |
+| `apps` | | `apps` |
+| `appAction` | `id`, `op` | `appsChanged` once the app responds |
+| `deckSave` | `deck` | `deck` to every connected device, or a `notice` with code `deck` when the PC rejected or couldn't read the deck, could not save it, or was too busy to try |
+| `volume` | `value?`, `muted?` | `volume` |
+| `clipboardSet` | `text`, up to 64 KiB | a `notice` with code `tooLong` if it is longer |
+| `clipboardGet` | | `clipboard`, cut to 64 KiB (UTF-8) |
+| `voiceStart` | `locale?` | `voice` updates |
+| `voiceStop` | `cancel` | final `voice` update |
+| `settingsSave` | `settings`, `updatedAt` | none; a `notice` with code `settings` on failure |
+| `settingsList` | | `settingsList` |
+| `settingsCopy` | `from` (device ID) | `settings`, or a `notice` with code `settings` |
+
+## PC → phone
+
+| Message | Fields | Sent when |
+| --- | --- | --- |
+| `apps` | `apps: [{id, name, running, active, hidden}]` | Answer to `apps`. |
+| `appsChanged` | | Apps launched, quit, hid or changed focus. Request `apps` again if the list is visible. |
+| `deck` | `deck` | The deck changed. |
+| `layout` | `layout` | The PC's input source changed. |
+| `volume` | `value`, `muted` | Output volume changed. |
+| `volumeUnavailable` | | The output device has no volume control (HDMI, for example). |
+| `paused` | `paused` | Input was paused or resumed on the PC. While paused, the PC ignores input and refuses actions, text, clipboard and voice: `action` gets a failed `actionResult`, `voiceStart` gets `voice` with `unavailable`, and the others get a `notice` with code `paused`. Live typing (`edit`) is ignored like other input. Saving the deck and phone settings still works. |
+| `capsLock` | `on` | Caps Lock turned on or off, from the PC's own keyboard or a phone. Text typed as key presses turns it off for its letters and back on afterwards, without this message. |
+| `features` | `features` | Permissions or settings changed. |
+| `notice` | `level`, `code`, `message` | Something the person should know, e.g. `secureInput` when a password field blocks typing. |
+| `clipboard` | `text` | Answer to `clipboardGet`. |
+| `voice` | `state`, `text?`, `final`, `message?` | Voice typing: `listening`, `stopped`, `unavailable` or `error`. |
+| `actionResult` | `id?`, `ok`, `message?` | Answer to an `action` with an `id`, or a failed action without one. |
+| `settingsList` | `devices: [{id, name, model, updatedAt}]` | Answer to `settingsList`: other paired devices with saved settings, newest first. |
+| `settings` | `settings`, `updatedAt` | Answer to `settingsCopy`: that device's saved settings. |
+| `bye` | `reason`, `reconnect?` | The PC is closing the connection, with a message to show. `reconnect: true` means the PC stopped or restarted its server and the phone may reconnect with its token on its own; otherwise (disconnected or removed on the PC, protocol errors) it waits for the person to reconnect. |
+
+### Keyboard layout
+
+```json
+{
+  "id": "00000409",
+  "name": "English (United States)",
+  "iso": false,
+  "keys": [{ "code": 0, "base": "a", "shift": "A", "option": "", "optionShift": "" }]
+}
+```
+
+`dead` is a bitmask of levels that start a dead-key sequence (bit 0 base,
+1 shift, 2 option, 3 option-shift). Their labels are for display only, and the
+PC never uses them to type a character.
+
+## Deck
+
+```json
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "main",
+      "name": "Main",
+      "columns": 4,
+      "tiles": [
+        {
+          "id": "t1",
+          "label": "Screenshot",
+          "icon": { "kind": "symbol", "name": "camera" },
+          "color": "#3b82f6",
+          "action": { "kind": "system", "name": "screenshotArea" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Limits: 1 to 24 pages, 1 to 8 columns and up to 64 tiles per page,
+80-character labels, IDs of up to 128 bytes, and 4 096 bytes (UTF-8) of text,
+URL or shell command per action. App IDs and shortcut names are limited to
+512 bytes, a `keys` action's `char` to 16 bytes, an emoji icon to 64 bytes
+and a symbol name to 128. `color` is `#rgb`, `#rgba`, `#rrggbb` or
+`#rrggbbaa`. The PC rejects a deck that breaks these limits, and the sender
+gets a `notice` explaining why.
+
+## Phone settings
+
+Each remembered device can keep its own settings on the PC, so they survive
+a cleared browser and can be copied to another device. The phone's own
+storage stays the source of truth; the PC stores the object as it is.
+
+```json
+{ "t": "settingsSave", "settings": { "version": 1, "settings": { "theme": "dark" }, "keyboards": [] }, "updatedAt": 1750000000000 }
+```
+
+- `settings` must be a JSON object of at most 128 KiB. Its contents are up to
+  the phone; the phone app sends `{version, settings, keyboards}` and leaves
+  out per-device values such as the device name.
+- `updatedAt` is when the person last changed a setting, in milliseconds since
+  1970. The PC keeps a save only if it is not older than the copy it has.
+- Only devices paired with `remember: true` are stored; for others,
+  `settingsSave` is ignored. There is no reply on success.
+- `welcome` carries the saved copy as `settings: {settings, updatedAt}`. The
+  phone applies it when it is newer than its own settings and otherwise sends
+  `settingsSave`.
+- `settingsList` lists the other paired devices that have saved settings.
+  `settingsCopy` with one of their `id`s answers with
+  `{"t":"settings","settings":{…},"updatedAt":n}`. The phone applies it and
+  saves it as its own with a new `updatedAt`.
+
+These messages are allowed while input is paused.
+
+## Windows adaptations
+
+`option` and `optionShift` hold AltGr (Ctrl+Alt) layout levels on Windows.
+Compatibility system identifiers keep their protocol names: `missionControl`
+and `appExpose` open Task View, `launchpad` opens Start, `spotlight` opens
+Search, and `spaceLeft`/`spaceRight` switch virtual desktops. `hide` minimizes
+app windows and `quit` requests a graceful close. Keyboard backlight media
+messages return an unsupported-hardware notice. Brightness uses WMI for an
+active internal panel, then DDC/CI for a supported external display. Fast
+forward and rewind use Windows app commands and depend on the player.

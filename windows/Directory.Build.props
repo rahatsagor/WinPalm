@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)../../winpalm-dev/cache/dotnet</ArtifactsPath>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+  </PropertyGroup>
+</Project>
