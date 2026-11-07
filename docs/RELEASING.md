@@ -40,7 +40,7 @@ Use `0.1.0` instead for the initial release. Do not move a published tag or repl
 
 Only the publishing job has repository write permission. Build products, dependency caches and diagnostic reports stay in the runner's temporary directory or short-lived Actions artifacts. They are never committed.
 
-To retry a failed release, rerun its workflow or run **Release → Run workflow** on `main` with the existing version tag and **test_signing unchecked**. A failed draft can be completed. The workflow refuses to overwrite an already published release. For onboarding, the manual workflow defaults to `main` and **test_signing checked**, which uses a test policy and never publishes. Start production runs when the approver can review both signing requests.
+To retry a failed release, rerun its original tag-triggered workflow. Alternatively, use **Release → Run workflow**, select the existing version tag under **Use workflow from**, enter that same tag in the tag input, and uncheck **test_signing**. The selected ref, signing origin and checked-out commit must match. A failed draft can be completed. The workflow refuses to overwrite an already published release. For onboarding, the manual workflow defaults to `main` and **test_signing checked**, which uses a test policy and never publishes. Start production runs when the approver can review both signing requests.
 
 GitHub native self-tests establish those automated checks on the runner. The setup checks cover silent installation on hosted Windows runners. Actual phone gestures, microphone recognition quality, interactive setup and physical-device behavior still need hardware checks.
 
