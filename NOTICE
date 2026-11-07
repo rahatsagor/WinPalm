@@ -4,7 +4,7 @@ Licensed under GNU Affero General Public License version 3 only.
 
 WinPalm adapts CmdPalm's Rust host engine and Vue phone client for Windows.
 CmdPalm source: https://github.com/rahatsagor/CmdPalm
-Source baseline: version 0.6.0, commit d7b2691c1095e9aa9a344a7dbd31a4fca667d2cd
+Source baseline: version 0.7.0, commit 1d95d08451a4d88f7732cac5e3035d3bbe4840e7
 CmdPalm's original AGPL-3.0-only license is preserved in LICENSE.
 
 The Windows desktop host, Windows input backend, packaging and Windows
