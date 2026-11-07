@@ -13,6 +13,10 @@ if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Ex
 if ($TestSigning -and ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted')) {
     throw 'Test-certificate trust is restricted to disposable GitHub-hosted Windows runners.'
 }
+if ($TestSigning) {
+    $Principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (!$Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'The disposable signing-test runner must have administrator rights.' }
+}
 $Store = $null
 $Added = [Collections.Generic.List[Security.Cryptography.X509Certificates.X509Certificate2]]::new()
 try {
@@ -20,7 +24,10 @@ try {
         # Trust only the returned self-signed test certificates for this check.
         # WinVerifyTrust must then validate the file digest normally; accepting
         # UnknownError/NotTrusted would hide errors unrelated to certificate trust.
-        $Store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+        # CurrentUser\Root prompts for interactive confirmation on Windows.
+        # GitHub-hosted runners are disposable administrators; their machine
+        # store avoids that dialog and is restored in finally below.
+        $Store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
         $Store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
         foreach ($Path in $Files) {
             $Certificate = (Get-AuthenticodeSignature -LiteralPath $Path).SignerCertificate

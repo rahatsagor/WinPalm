@@ -32,10 +32,10 @@ try {
     $Certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=WinPalm CI test only' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
     foreach ($Path in $Files) { $null = Set-AuthenticodeSignature -FilePath $Path -Certificate $Certificate -HashAlgorithm SHA256 }
     & $Verify -Files $Files -Version $Version -TestSigning
-    if (Test-Path "Cert:\CurrentUser\Root\$($Certificate.Thumbprint)") { throw 'Test verifier left its certificate trusted.' }
+    if (Test-Path "Cert:\LocalMachine\Root\$($Certificate.Thumbprint)") { throw 'Test verifier left its certificate trusted.' }
     Write-Output 'PASS signed native app and DLL; temporary certificate trust removed'
 
-    $RootStore = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+    $RootStore = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
     $RootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     try {
         $RootStore.Add($Certificate)
@@ -52,7 +52,7 @@ try {
         $Stream.WriteByte($Byte -bxor 1)
     } finally { $Stream.Dispose() }
     Expect-Failure { & $Verify -Files $Files -Version $Version -TestSigning } 'Invalid Authenticode signature'
-    if (Test-Path "Cert:\CurrentUser\Root\$($Certificate.Thumbprint)") { throw 'Failed verification left its test certificate trusted.' }
+    if (Test-Path "Cert:\LocalMachine\Root\$($Certificate.Thumbprint)") { throw 'Failed verification left its test certificate trusted.' }
     Write-Output 'PASS modified signed executable refused; certificate cleanup also runs after failure'
 } finally {
     if ($null -ne $Certificate) { Remove-Item "Cert:\CurrentUser\My\$($Certificate.Thumbprint)" -ErrorAction SilentlyContinue }
