@@ -24,6 +24,18 @@ internal static class SelfTest
       if (System.Runtime.InteropServices.Marshal.SizeOf<Win32.Input>() != 40) throw new InvalidOperationException("Unexpected Win32 INPUT ABI size");
       if (desktop.Apps.List().Length < 6 || desktop.Apps.Action("not-a-catalog-id", "open")) throw new InvalidOperationException("App catalog validation failed");
       checks.Add("Windows app catalog and identifier validation");
+      var nativeIcons = 0;
+      foreach (var app in new[] { "explorer", "browser", "terminal", "notepad", "calculator", "settings" })
+      {
+        var png = desktop.Apps.Icon("builtin:" + app, 64);
+        if (png is null) continue; // The phone has a specific fallback for these.
+        using var stream = new MemoryStream(Convert.FromBase64String(png));
+        using var image = Image.FromStream(stream);
+        if (image.Width != 64 || image.Height != 64) throw new InvalidOperationException("Unexpected app icon dimensions");
+        nativeIcons++;
+      }
+      if (nativeIcons == 0) throw new InvalidOperationException("No native app icons could be extracted");
+      checks.Add($"native app icons decoded: {nativeIcons}/6 built-ins (others use phone fallbacks)");
       var audio = AudioVolume.Read(); checks.Add(audio is null ? "audio endpoint unavailable (hardware check needed)" : "Core Audio endpoint read");
       using (var client = new HttpClient()) { var html = client.GetStringAsync($"http://127.0.0.1:{port}/").GetAwaiter().GetResult(); if (!html.Contains("WinPalm")) throw new InvalidOperationException("Bundled phone client missing"); }
       checks.Add("bundled phone client HTTP");

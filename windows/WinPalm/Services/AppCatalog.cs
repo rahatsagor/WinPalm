@@ -9,7 +9,7 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
 {
   /// `AppId` is the package's AppUserModelID, which also identifies its
   /// windows; `Executable` identifies desktop app windows.
-  private sealed record Entry(string Id, string Name, string Launch, string? Executable, string? AppId = null);
+  private sealed record Entry(string Id, string Name, string Launch, string? Executable, string? AppId = null, string? IconLocation = null);
   private readonly record struct Window(nint Handle, string Path, string? AppId, string Title);
   private readonly object gate = new();
   private readonly object refreshGate = new();
@@ -106,11 +106,19 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
         var appIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // The first entry for an executable or package wins, so built-ins
         // stand in for their Start Menu and AppsFolder duplicates.
-        void Add(string name, string launch, string? executable = null, string? id = null, string? appId = null)
+        void Add(string name, string launch, string? executable = null, string? id = null, string? appId = null, string? iconLocation = null)
         {
-          if ((executable is not null && executables.Contains(executable)) || (appId is not null && appIds.Contains(appId))) return;
+          if ((executable is not null && executables.Contains(executable)) || (appId is not null && appIds.Contains(appId)))
+          {
+            // Keep stable built-in IDs while retaining a shortcut's custom
+            // icon and the Store identity discovered later in the scan.
+            var existing = list.Values.First(e => Same(e.Executable, executable) || Same(e.AppId, appId));
+            list[existing.Id] = existing with { AppId = existing.AppId ?? appId, IconLocation = existing.IconLocation ?? iconLocation };
+            if (appId is not null) appIds.Add(appId);
+            return;
+          }
           id ??= Id(launch);
-          if (!list.TryAdd(id, new Entry(id, name, launch, executable, appId))) return;
+          if (!list.TryAdd(id, new Entry(id, name, launch, executable, appId, iconLocation))) return;
           if (executable is not null) executables.Add(executable);
           if (appId is not null) appIds.Add(appId);
         }
@@ -145,7 +153,8 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
                   link = ((dynamic)shell!).CreateShortcut(path);
                   string target = ((dynamic)link).TargetPath;
                   if (!target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || IsUninstaller(name, target) || !File.Exists(target)) continue;
-                  Add(name, path, target);
+                  string iconLocation = ((dynamic)link).IconLocation;
+                  Add(name, path, target, iconLocation: string.IsNullOrWhiteSpace(iconLocation) ? path : iconLocation);
                 }
                 catch (COMException) { }
                 finally { if (link is not null) Marshal.FinalReleaseComObject(link); }
@@ -217,15 +226,35 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
     if (entry is null) return null;
     return worker.Run(() =>
     {
-      try
+      // Try each source independently. A launcher/stub with no embedded icon
+      // must not prevent reading its Store icon or shortcut icon.
+      var edge = Math.Clamp(size, 16, 256);
+      var sources = new[] {
+        entry.AppId is null ? null : "shell:AppsFolder\\" + entry.AppId,
+        entry.AppId is null ? null : "::{4234d49b-0245-4df3-b780-3893943456e1}\\" + entry.AppId,
+        File.Exists(entry.Launch) ? entry.Launch : null,
+        entry.Executable,
+      }.Where(path => path is not null).Distinct(StringComparer.OrdinalIgnoreCase);
+      Bitmap? bitmap = null;
+      if (entry.IconLocation is not null) bitmap = ShellIcons.Resource(entry.IconLocation, edge);
+      foreach (var source in sources)
       {
-        using var icon = File.Exists(entry.Executable) ? System.Drawing.Icon.ExtractAssociatedIcon(entry.Executable!) : null;
-        var parsingName = entry.AppId is not null ? "::{4234d49b-0245-4df3-b780-3893943456e1}\\" + entry.AppId : (File.Exists(entry.Launch) ? entry.Launch : entry.Executable);
-        using var bitmap = (parsingName is null ? null : ShellIcons.Read(parsingName, Math.Clamp(size, 16, 256))) ?? (icon ?? SystemIcons.Application).ToBitmap();
-        using var resized = new Bitmap(bitmap, new Size(Math.Clamp(size, 16, 256), Math.Clamp(size, 16, 256)));
+        if (bitmap is not null) break;
+        bitmap = ShellIcons.Read(source!, edge);
+      }
+      if (bitmap is null) return null; // The phone supplies a legible, colored fallback.
+      using (bitmap)
+      {
+        using var resized = new Bitmap(edge, edge, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(resized))
+        {
+          graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+          var scale = Math.Min((float)edge / bitmap.Width, (float)edge / bitmap.Height);
+          var width = bitmap.Width * scale; var height = bitmap.Height * scale;
+          graphics.DrawImage(bitmap, (edge - width) / 2, (edge - height) / 2, width, height);
+        }
         using var stream = new MemoryStream(); resized.Save(stream, System.Drawing.Imaging.ImageFormat.Png); return Convert.ToBase64String(stream.ToArray());
       }
-      catch (Exception error) when (error is ArgumentException or IOException) { return null; }
     });
   }
   /// App windows, enumerated on the STA worker because packaged apps are
