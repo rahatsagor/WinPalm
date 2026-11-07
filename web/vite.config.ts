@@ -10,7 +10,9 @@ const host = process.env.WINPALM_HOST ?? 'http://127.0.0.1:8790'
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
 
 export default defineConfig({
-  plugins: [vue(), tailwindcss()],
+  // Public assets already use browser-root URLs. Keep them out of module
+  // resolution, which otherwise creates drive-less file URLs on Windows.
+  plugins: [vue({ template: { transformAssetUrls: { includeAbsolute: false } } }), tailwindcss()],
   define: { __APP_VERSION__: JSON.stringify(version) },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },

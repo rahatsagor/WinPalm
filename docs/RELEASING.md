@@ -1,55 +1,84 @@
 # Releasing WinPalm
 
-The first public version is **0.1.0**. Private development-preview version numbers are not public releases. Public source uses a fresh, focused commit history, with the development history archived outside the repository.
+WinPalm uses the same release routine as CmdPalm: bump versions, write the changelog, commit and push, then push a version tag. GitHub Actions checks the exact tagged source, builds both native Windows packages, assembles the universal setup and publishes a stable release.
 
-The website is **https://winpalm.rsapplication.com**. Prepare and deploy the website and launch video before pushing the source and release tag to `rahatsagor/WinPalm`. No GitHub push or publication is part of local release preparation.
+The public version sequence starts at **0.1.0**. Private development-preview numbers are outside that sequence. Publishing credentials and signing material belong in GitHub settings, never in the source repository.
 
-## Build and check
+## Prepare a release
 
-1. Keep `Cargo.toml`, the WinPalm entry in `Cargo.lock`, `web/package.json`, `windows/WinPalm/WinPalm.csproj` and `windows/WinPalm/app.manifest` in sync. The manifest appends `.0` to the three-part version.
-2. Add the release section to `CHANGELOG.md` and run `bun scripts/release-notes.ts check 0.1.0`.
-3. Build both native portable packages with `scripts/build.ps1 -Architecture x64 -Package` and `-Architecture arm64 -Package`. The updater harness checks their complete structure, PE architecture and native version on Windows.
-4. Install NSIS 3, then run `bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.1.0-Setup.exe`. The same compiler can run on macOS, Linux or Windows. `MAKENSIS` overrides its path.
-5. Test the installed app on Windows, including General → Check speech setup, live phone dictation over trusted HTTPS, ordinary controls, sign-in startup and uninstall. Keep OS, architecture and language-specific results in the companion acceptance record.
+From a clean `main` checkout, after implementing the changes:
 
-The setup EXE contains both native payloads and detects the PC's native x64/ARM64 architecture. It installs per user with no administrator requirement, adds a Start menu shortcut and offers desktop/sign-in shortcuts. It gracefully asks a running WinPalm to quit. A new installation requires a new/empty directory; replacement requires a recognizable WinPalm package. Uninstall removes managed program files while retaining private pairings, settings and certificates.
+```powershell
+bun scripts/bump-version.ts 0.1.1
+# Move the relevant Unreleased notes into a dated ## [0.1.1] section.
+bun scripts/release-notes.ts check 0.1.1
+bun test scripts
+```
 
-Local setup compilation and archive tests do not establish actual Windows installer execution. Do not claim SmartScreen reputation, Authenticode signing or ARM64 installer runtime results unless those have been verified.
+The bump command updates `Cargo.toml`, the `winpalm-core` entry in `Cargo.lock`, `web/package.json`, `windows/WinPalm/WinPalm.csproj` and `windows/WinPalm/app.manifest`. The manifest uses a fourth `.0` component. Stable three-part versions are required; Windows version components must be below 65535. The release check rejects missing notes or mismatched versions, including a stale lockfile.
 
-## Expected downloads
+Review and commit the source changes, all five version files and `CHANGELOG.md`, then push `main`. Wait for its CI checks to pass before tagging:
 
-- **`WinPalm-Setup.exe`**: stable download name for README and website buttons.
-- `WinPalm-0.1.0-Setup.exe`: the same installer with a versioned name.
-- `WinPalm-0.1.0-win-x64.zip` and `.zip.sha256`.
-- `WinPalm-0.1.0-win-arm64.zip` and `.zip.sha256`.
-- `WinPalm-0.1.0-source.zip`.
-- Setup checksum files and `SHA256SUMS.txt`.
+```powershell
+git push origin main
+git tag -a v0.1.1 -m "WinPalm 0.1.1"
+git push origin v0.1.1
+```
 
-The setup alias and versioned setup must be byte-identical. Each package also includes exact corresponding source at `web/source.zip`, its license and third-party notices. Installer runtime notices are installed as `NSIS-LICENSE.txt`.
+Use `0.1.0` instead for the initial release. Do not move a published tag or replace a published release's assets. Fix a public release with a new version.
 
-The in-app updater deliberately uses the native portable ZIP, including for installed copies. Keep both native ZIP/checksum pairs on every public release. A checksum line must name its exact ZIP after the 64-character SHA-256 hash. Preview users install 0.1.0 manually once because their internal preview version may compare higher than public 0.1.0.
+## What the workflow does
 
-## Website and reciprocal links
+1. Validates the `vN.N.N` tag, changelog, all recorded versions and the updater's repository. Resolves the tag to an exact source commit.
+2. Calls the same CI workflow used for `main` and pull requests. Native x64 and ARM64 Windows runners check phone lint/tests/build, release-script regressions, Rust format/Clippy/tests, host regressions, self-contained .NET publishing, the packaged Windows self-test and archive/binary validation.
+3. Reuses those checked packages, verifies their checksums and compiles a universal setup EXE with NSIS 3.10+. Confirms the stable and versioned setup files are byte-identical.
+4. Runs the actual setup on fresh x64 and ARM64 Windows runners. Checks the default installation, Start menu shortcut, installed app integration checks, native architecture, graceful replacement of a running tray app, uninstall and preservation of private app data.
+5. Creates checksums, generates release notes from `CHANGELOG.md`, uploads the complete download set to a draft and then publishes it as the latest stable release. Website, docs, guides, film and CmdPalm links are included in the notes.
 
-The WinPalm landing-page download button should use `https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe`. Link to the GitHub release page as an alternative and link the GitHub repository for source.
+Only the publishing job has repository write permission. Build products, dependency caches and diagnostic reports stay in the runner's temporary directory or short-lived Actions artifacts. They are never committed.
 
-Promote **CmdPalm** on the WinPalm README and website: “Using a Mac? Meet CmdPalm.” Link https://cmdpalm.app and https://github.com/rahatsagor/CmdPalm. Promote **WinPalm** from CmdPalm's README and website: “Using Windows? Meet WinPalm.” Link https://winpalm.rsapplication.com and https://github.com/rahatsagor/WinPalm. Keep these recommendations outside the apps' control UI.
+To retry a failed release, rerun its workflow or run **Release → Run workflow** with the existing tag. A failed draft can be completed. The workflow refuses to overwrite an already published release.
 
-## Push and publish after the website is deployed
+GitHub native self-tests establish those automated checks on the runner. The setup checks cover silent installation on hosted Windows runners. Actual phone gestures, microphone recognition quality, interactive setup and physical-device behavior still need hardware checks.
 
-1. Review the clean local history and final acceptance record. Scan the public tree and history for private artifacts or credentials. Keep the private history bundle, builds and personal notes in `winpalm-dev`, outside public source.
-2. Create the public `rahatsagor/WinPalm` repository without an unrelated generated README. Set the description, website and topics. Enable private vulnerability reporting in Security.
-3. Push `main` and then the matching `v0.1.0` tag. Do not push the archived development history.
-4. The release workflow builds/tests native x64 and ARM64 packages, combines them into the universal setup and creates a **draft** release. This first GitHub execution remains to be observed after the push.
-5. Download the draft setup, install it on Windows and check the asset names/checksums. Test the website buttons and both products' reciprocal links. Add the prepared website/video links to the release notes when deployed.
-6. Publish the reviewed draft as the latest stable release. Do not replace assets on an already published release; fix problems with a new version.
+## Downloads on every release
 
-The public launch is not complete until those remote and Windows checks have been observed. A local build does not create a repository or publish a release.
+For version `0.1.0`, the release contains:
 
-## Future upgrade acceptance
+| File | Purpose |
+| --- | --- |
+| `WinPalm-Setup.exe` | Stable download for the website and README |
+| `WinPalm-0.1.0-Setup.exe` | Identical setup with a versioned filename |
+| `WinPalm-0.1.0-win-x64.zip` | Native Intel/AMD portable package and in-app update |
+| `WinPalm-0.1.0-win-arm64.zip` | Native Windows on Arm package and in-app update |
+| `WinPalm-0.1.0-source.zip` | Corresponding source for this release |
+| `*.exe.sha256`, `*.zip.sha256` | SHA-256 checksums naming their exact download |
+| `SHA256SUMS.txt` | Combined checksums for every EXE and ZIP |
 
-Before publishing the first update after 0.1.0, test an actual 0.1.0-to-newer installation on Windows. Check tray notification, release notes, download cancellation, network interruption, restart, original install path, pinned/desktop shortcuts, sign-in command, pairings, settings, Deck, custom keyboards and certificate trust. Repeat on x64/ARM64 where available.
+Keep both native ZIP/checksum pairs on every stable release. The in-app updater uses the native ZIP even for copies installed by setup. Each package also serves its exact corresponding source at `web/source.zip`, with the license and dependency notices.
 
-The updater restores previous files after replacement failure or an updated process exiting before startup confirmation. If a new process stays running without confirmation, it is left running and its backup is retained. Confirm recovery from a blocked destination file on a disposable test profile, and check Settings → Installed apps plus uninstall after an in-place update.
+The setup selects the PC's native architecture, includes its .NET runtime and installs per user without elevation. It creates a Start menu shortcut and offers desktop and sign-in shortcuts. Re-running setup replaces a recognizable installation. A new installation requires a new or empty folder. Uninstall removes managed program files and retains private pairings, settings and certificates.
 
-Downloads use HTTPS and SHA-256 checksums from the same release. Preview/public initial packages have no Authenticode signature or separate signed update manifest. See [SECURITY.md](../SECURITY.md#updates).
+Initial releases are unsigned. Checksums detect corruption against the release metadata; they are not publisher signatures. Authenticode signing and independent signed update metadata remain future work. See [SECURITY.md](../SECURITY.md#updates).
+
+## Build locally on Windows
+
+Install Git, Bun, stable Rust with the native MSVC toolchain, the exact .NET SDK selected in `global.json`, Visual Studio C++ Build Tools, PowerShell 7 and NSIS 3.10+. Include the ARM64 C++ tools and Windows SDK for ARM64 cross-builds. Update the SDK pin and regenerate `windows/WinPalm/packages.lock.json` together when intentionally upgrading .NET; a floating SDK can change implicit package references and break locked restore.
+
+```powershell
+./scripts/build.ps1 -Architecture x64 -Package
+./scripts/build.ps1 -Architecture arm64 -Package
+bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.1.0-Setup.exe
+```
+
+`-DevelopmentDirectory` chooses a different output folder outside the source tree. `MAKENSIS` overrides the NSIS compiler path. The installer compiler can run on Windows, Linux or macOS; installation behavior must be checked on Windows.
+
+## Installation and update acceptance
+
+Before tagging, test the candidate setup on Windows. Check first install, architecture selection, app startup, firewall setup, shortcuts, sign-in startup and uninstall. Exercise normal phone controls, pairing/revocation and **General → Check speech setup**, then live dictation over trusted HTTPS where a compatible speech language is installed. Record the Windows build, architecture, speech language and hardware results outside public source.
+
+For every update after 0.1.0, test an actual old-to-new upgrade on a disposable Windows installation. Check notification, release notes, download cancellation, network interruption, restart, install path, shortcuts, sign-in, pairings, settings, Deck, custom keyboards and certificate trust. Repeat on both architectures where available. Confirm Installed apps shows the new version and uninstall still works.
+
+The updater restores previous files after replacement failure or the new process exiting before startup confirmation. If a new process stays running without confirmation, it keeps running and the backup remains available. Check recovery from a blocked destination file on a disposable profile.
+
+After publication, confirm the [latest release](https://github.com/rahatsagor/WinPalm/releases/latest), [stable setup link](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe), architecture downloads, checksums and website buttons. The deployed [website](https://winpalm.rsapplication.com), [docs](https://winpalm.rsapplication.com/docs/), [guides](https://winpalm.rsapplication.com/guides/) and [film](https://winpalm.rsapplication.com/#film) should all be reachable.

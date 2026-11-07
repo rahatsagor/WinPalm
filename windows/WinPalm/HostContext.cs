@@ -78,6 +78,7 @@ internal sealed class HostContext : ApplicationContext
   /// Application.OpenForms omits hidden windows, so marshal through the
   /// settings window, whose handle exists for the app's lifetime.
   internal void ShowFromAnotherThread() => OnWindowThread(ShowWindow);
+  internal void QuitFromAnotherThread() => OnWindowThread(Quit);
   /// For callbacks on other threads (SystemEvents, waits): an exception
   /// there would end the process, and the window may be closing.
   private void OnWindowThread(Action work)

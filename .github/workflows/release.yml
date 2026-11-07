@@ -1,20 +1,107 @@
-name: Release packages
+name: Release
+
+# Like CmdPalm: update versions and changelog, commit/push, then push vN.N.N.
+# CI builds both native packages; publication starts only after checks pass.
 on:
   push:
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to package (for example v0.1.0)
+        description: Existing version tag to release (for example v0.1.0)
         required: true
         type: string
+
 permissions:
   contents: read
+
 concurrency:
   group: winpalm-release
   cancel-in-progress: false
+
 jobs:
-  build:
+  version:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.version.outputs.commit }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.4'
+      - name: Verify tag, versions and changelog
+        id: version
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          bun scripts/release-notes.ts check "$RELEASE_TAG"
+          COMMIT="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$COMMIT" == "$(git rev-parse HEAD)" ]]
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: Validate release
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.version.outputs.commit }}
+
+  package:
+    name: Build universal setup
+    needs: [version, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.4'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: winpalm-package-*
+          merge-multiple: true
+          path: packages
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: winpalm-source
+          path: packages
+      - name: Install setup compiler
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nsis
+      - name: Verify native archives and build universal setup
+        shell: bash
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          (cd packages && sha256sum -c "WinPalm-$VERSION-win-x64.zip.sha256" "WinPalm-$VERSION-win-arm64.zip.sha256")
+          mkdir -p "$RUNNER_TEMP/payloads/x64" "$RUNNER_TEMP/payloads/arm64"
+          unzip -q "packages/WinPalm-$VERSION-win-x64.zip" -d "$RUNNER_TEMP/payloads/x64"
+          unzip -q "packages/WinPalm-$VERSION-win-arm64.zip" -d "$RUNNER_TEMP/payloads/arm64"
+          bun scripts/build-installer.ts --payloads "$RUNNER_TEMP/payloads" --output "$GITHUB_WORKSPACE/packages/WinPalm-$VERSION-Setup.exe"
+          cmp "packages/WinPalm-$VERSION-Setup.exe" packages/WinPalm-Setup.exe
+          (cd packages && sha256sum "WinPalm-$VERSION-source.zip" > "WinPalm-$VERSION-source.zip.sha256" && sha256sum ./*.zip ./*.exe > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: winpalm-release-files
+          path: packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  installer:
+    name: Install and uninstall ${{ matrix.architecture }}
+    needs: [version, package]
     strategy:
       fail-fast: false
       matrix:
@@ -24,41 +111,32 @@ jobs:
           - architecture: arm64
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 10
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ needs.version.outputs.commit }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          bun-version: '1.4.4'
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: '10.0.x'
-      - name: Validate version and build complete package
+          name: winpalm-release-files
+          path: packages
+      - name: Check real setup, reinstall and uninstall
         shell: pwsh
-        run: |
-          bun scripts/release-notes.ts check $env:RELEASE_TAG
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          ./scripts/build.ps1 -Architecture '${{ matrix.architecture }}' -DevelopmentDirectory "$env:RUNNER_TEMP/winpalm-dev" -Package
+        run: ./scripts/test-installer.ps1 -Setup packages/WinPalm-Setup.exe -Architecture '${{ matrix.architecture }}' -Version $env:RELEASE_TAG -WorkDirectory "$env:RUNNER_TEMP/installer-check"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
-          name: release-${{ matrix.architecture }}
-          path: |
-            ${{ runner.temp }}/winpalm-dev/artifacts/WinPalm-*-win-*.zip
-            ${{ runner.temp }}/winpalm-dev/artifacts/WinPalm-*-win-*.zip.sha256
-          if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: matrix.architecture == 'x64'
-        with:
-          name: release-source
-          path: ${{ runner.temp }}/winpalm-dev/artifacts/WinPalm-*-source.zip
-          if-no-files-found: error
-  draft:
-    needs: build
+          name: winpalm-installer-check-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/installer-check/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    name: Publish stable release
+    needs: [version, package, installer]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -67,44 +145,40 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ needs.version.outputs.commit }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.4'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: release-*
-          merge-multiple: true
+          name: winpalm-release-files
           path: packages
-      - name: Install setup compiler
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nsis
-      - name: Build universal setup EXE
-        shell: bash
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          mkdir -p "$RUNNER_TEMP/payloads/x64" "$RUNNER_TEMP/payloads/arm64"
-          unzip -q "packages/WinPalm-$VERSION-win-x64.zip" -d "$RUNNER_TEMP/payloads/x64"
-          unzip -q "packages/WinPalm-$VERSION-win-arm64.zip" -d "$RUNNER_TEMP/payloads/arm64"
-          bun scripts/build-installer.ts --payloads "$RUNNER_TEMP/payloads" --output "$GITHUB_WORKSPACE/packages/WinPalm-$VERSION-Setup.exe"
-          (cd packages && sha256sum *.zip *.exe > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
-      - name: Verify downloads and prepare draft release
+      - name: Recheck release checksums
+        run: cd packages && sha256sum -c SHA256SUMS.txt
+      - name: Upload all assets and publish stable release
         shell: bash
         run: |
           bun scripts/release-notes.ts check "$RELEASE_TAG"
           bun scripts/release-notes.ts notes "$RELEASE_TAG" > "$RUNNER_TEMP/notes.md"
           VERSION="${RELEASE_TAG#v}"
-          (cd packages && sha256sum -c "WinPalm-$VERSION-win-x64.zip.sha256" "WinPalm-$VERSION-win-arm64.zip.sha256")
+          FILES=(packages/WinPalm-Setup.exe packages/WinPalm-Setup.exe.sha256
+            "packages/WinPalm-$VERSION-Setup.exe" "packages/WinPalm-$VERSION-Setup.exe.sha256"
+            "packages/WinPalm-$VERSION-win-x64.zip" "packages/WinPalm-$VERSION-win-x64.zip.sha256"
+            "packages/WinPalm-$VERSION-win-arm64.zip" "packages/WinPalm-$VERSION-win-arm64.zip.sha256"
+            "packages/WinPalm-$VERSION-source.zip" "packages/WinPalm-$VERSION-source.zip.sha256"
+            packages/SHA256SUMS.txt)
           if DRAFT="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [[ "$DRAFT" != true ]]; then
               echo '::error::This release is already published. Use a new version.'
               exit 1
             fi
             gh release edit "$RELEASE_TAG" --title "WinPalm $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-            gh release upload "$RELEASE_TAG" --clobber packages/*
+            gh release upload "$RELEASE_TAG" --clobber "${FILES[@]}"
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "WinPalm $VERSION" --notes-file "$RUNNER_TEMP/notes.md" packages/*
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "WinPalm $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${FILES[@]}"
           fi
-          echo 'Review the setup EXE on Windows, verify the deployed website/video links, then publish the draft as the latest stable release.' >> "$GITHUB_STEP_SUMMARY"
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          echo "Published WinPalm $VERSION with universal setup, native update ZIPs, corresponding source and verified checksums." >> "$GITHUB_STEP_SUMMARY"

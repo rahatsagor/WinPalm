@@ -41,6 +41,9 @@ try {
     Run { rustup target add $Target }
     if (!$SkipChecks) {
         Run { bun scripts/release-notes.ts check ((Get-Content (Join-Path $Root 'web/package.json') -Raw | ConvertFrom-Json).version) }
+        Run { bun (Join-Path $Web 'node_modules/oxlint/bin/oxlint') scripts }
+        Run { bun (Join-Path $Web 'node_modules/typescript/bin/tsc') --project scripts --typeRoots (Join-Path $Web 'node_modules/@types') }
+        Run { bun test scripts }
         Run { dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path (Join-Path $Cache 'dotnet-update-tests') }
         Run { cargo fmt --all --check }
         Run { cargo clippy --locked --all-targets -- -D warnings }

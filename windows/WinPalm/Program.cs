@@ -19,8 +19,10 @@ internal static class Program
       if (args.Contains("--self-test")) return SelfTest.Run(args);
       if (args.Contains("--input-test")) return InputTest.Run(args);
       var identity = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
+      if (args is ["--quit-for-install"]) return QuitForInstall(identity);
       using var mutex = new Mutex(true, "Local\\RSApplication.WinPalm." + identity, out var first);
       using var show = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\RSApplication.WinPalm.Show." + identity);
+      using var quit = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\RSApplication.WinPalm.Quit." + identity);
       if (!first)
       {
         // Let the running copy bring its window to the front.
@@ -41,12 +43,14 @@ internal static class Program
         UpdateInstaller.Complete(completedId);
       }
       var listener = ThreadPool.RegisterWaitForSingleObject(show, (_, _) => context.ShowFromAnotherThread(), null, Timeout.Infinite, false);
-      try { Application.Run(context); } finally { listener.Unregister(null); }
+      var quitListener = ThreadPool.RegisterWaitForSingleObject(quit, (_, _) => context.QuitFromAnotherThread(), null, Timeout.Infinite, false);
+      try { Application.Run(context); } finally { listener.Unregister(null); quitListener.Unregister(null); }
       return 0;
     }
     catch (Exception error)
     {
       Diagnostics.Record(error);
+      if (args is ["--quit-for-install"]) return 1;
       if (args.Contains("--apply-update"))
       {
         if (args.Length == 2 && UpdateInstaller.ReportFailure(args[1], error.Message))
@@ -57,6 +61,36 @@ internal static class Program
       // restore the previous package, without waiting for a modal dialog.
       if (args.Contains("--complete-update")) return 1;
       MessageBox.Show($"WinPalm couldn't start.\n\n{error.Message}\n\nMake sure the complete package was extracted, including winpalm_core.dll and the web folder.", "WinPalm", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return 1;
+    }
+  }
+
+  /// The installer waits for this user's existing instance to release its
+  /// mutex. This also works while the settings window is hidden in the tray.
+  private static int QuitForInstall(string identity)
+  {
+    if (!Mutex.TryOpenExisting("Local\\RSApplication.WinPalm." + identity, out var mutex)) return 0;
+    using (mutex)
+    {
+      bool Finished(TimeSpan wait)
+      {
+        var acquired = false;
+        try { acquired = mutex.WaitOne(wait); }
+        catch (AbandonedMutexException) { acquired = true; }
+        finally { if (acquired) mutex.ReleaseMutex(); }
+        return acquired;
+      }
+      if (Finished(TimeSpan.Zero)) return 0;
+      // A first instance can be between creating its mutex and quit event.
+      for (var attempt = 0; attempt < 20; attempt++)
+      {
+        if (EventWaitHandle.TryOpenExisting("Local\\RSApplication.WinPalm.Quit." + identity, out var quit))
+        {
+          using (quit) { quit.Set(); }
+          return Finished(TimeSpan.FromSeconds(45)) ? 0 : 1;
+        }
+        if (Finished(TimeSpan.FromMilliseconds(100))) return 0;
+      }
       return 1;
     }
   }

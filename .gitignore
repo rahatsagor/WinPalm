@@ -2,6 +2,10 @@
 /target/
 /build/
 /dist/
+/artifacts/
+/packages/
+/cache/
+/node_modules/
 /web/node_modules
 /web/dist/
 /windows/**/bin/

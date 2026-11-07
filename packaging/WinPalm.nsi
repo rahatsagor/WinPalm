@@ -4,6 +4,7 @@ Unicode true
 !include "LogicLib.nsh"
 !include "WinVer.nsh"
 !include "FileFunc.nsh"
+!include "x64.nsh"
 
 !ifndef VERSION
   !error "VERSION must be the three-part app version."
@@ -66,28 +67,23 @@ Function .onInit
   SetShellVarContext current
   SetRegView 64
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_OK|MB_ICONSTOP "WinPalm needs 64-bit Windows 10 version 1809 or later. Windows 11 is recommended."
+    SetErrorLevel 2
+    MessageBox MB_OK|MB_ICONSTOP "WinPalm needs 64-bit Windows 10 version 1809 or later. Windows 11 is recommended." /SD IDOK
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastBuild} 17763
-    MessageBox MB_OK|MB_ICONSTOP "Update Windows to version 1809 or later before installing WinPalm."
+    SetErrorLevel 2
+    MessageBox MB_OK|MB_ICONSTOP "Update Windows to version 1809 or later before installing WinPalm." /SD IDOK
     Abort
   ${EndIf}
-  ; IsWow64Process2 returns the OS native machine, including under x86 emulation.
-  System::Call 'kernel32::GetCurrentProcess() p.r0'
-  ; The API writes USHORT values into these DWORD-sized System plug-in slots.
-  ; Zero the whole slots so their upper bytes cannot affect the comparison.
-  System::Call 'kernel32::IsWow64Process2(p r0, *i0.r1, *i0.r2) i.r3'
-  ${If} $3 == 0
-    MessageBox MB_OK|MB_ICONSTOP "Windows could not identify this PC's processor. The installation has not started."
-    Abort
-  ${EndIf}
-  ${If} $2 == 43620 ; IMAGE_FILE_MACHINE_ARM64
+  ; NSIS handles native machine detection, including an x86 setup on ARM64.
+  ${If} ${IsNativeARM64}
     StrCpy $NativeArchitecture "arm64"
-  ${ElseIf} $2 == 34404 ; IMAGE_FILE_MACHINE_AMD64
+  ${ElseIf} ${IsNativeAMD64}
     StrCpy $NativeArchitecture "x64"
   ${Else}
-    MessageBox MB_OK|MB_ICONSTOP "WinPalm supports x64 and ARM64 PCs. There is no 32-bit app."
+    SetErrorLevel 2
+    MessageBox MB_OK|MB_ICONSTOP "WinPalm supports x64 and ARM64 PCs. There is no 32-bit app." /SD IDOK
     Abort
   ${EndIf}
 FunctionEnd
@@ -106,7 +102,8 @@ Function ValidateInstallDirectory
     StrCmp $1 ".." next_entry
     StrCmp $1 "" empty_directory
     FindClose $0
-    MessageBox MB_OK|MB_ICONSTOP "Choose a new, empty folder or the folder containing an existing WinPalm installation. This folder contains other files."
+    SetErrorLevel 2
+    MessageBox MB_OK|MB_ICONSTOP "Choose a new, empty folder or the folder containing an existing WinPalm installation. This folder contains other files." /SD IDOK
     Abort
   next_entry:
     FindNext $0 $1
@@ -116,34 +113,35 @@ Function ValidateInstallDirectory
   safe_directory:
 FunctionEnd
 
-; The owner starting installation/uninstallation authorizes closing their
-; current tray app. A registered message lets WinPalm shut down gracefully.
+; The existing app signals its per-user quit event and waits for its instance
+; mutex. This works for a hidden tray window and never kills another process.
 !macro CloseWinPalm PREFIX
 Function ${PREFIX}CloseWinPalm
-  FindWindow $0 "" "WinPalm"
+  IfFileExists "$INSTDIR\WinPalm.exe" 0 finished
+  ClearErrors
+  ExecWait '$\"$INSTDIR\WinPalm.exe$\" --quit-for-install' $0
+  IfErrors needs_quit
   ${If} $0 != 0
-    System::Call 'user32::RegisterWindowMessageW(w "RSApplication.WinPalm.QuitForInstall") i.r1'
-    SendMessage $0 $1 0 0 /TIMEOUT=5000
-    StrCpy $2 0
-    ${Do}
-      Sleep 200
-      FindWindow $0 "" "WinPalm"
-      ${If} $0 == 0
-        ${ExitDo}
-      ${EndIf}
-      IntOp $2 $2 + 1
-    ${LoopUntil} $2 >= 50
-    ${If} $0 != 0
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "WinPalm is still running. Quit WinPalm from its notification-area menu, then choose Retry." IDRETRY retry
-      Abort
-      retry:
-      Call ${PREFIX}CloseWinPalm
-    ${EndIf}
+    needs_quit:
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "WinPalm is still running. Quit WinPalm from its notification-area menu, then choose Retry." /SD IDCANCEL IDRETRY retry
+    SetErrorLevel 2
+    Abort
+    retry:
+    Call ${PREFIX}CloseWinPalm
   ${EndIf}
+  finished:
 FunctionEnd
 !macroend
 !insertmacro CloseWinPalm ""
 !insertmacro CloseWinPalm "un."
+
+Function .onInstSuccess
+  SetErrorLevel 0
+FunctionEnd
+
+Function un.onUninstSuccess
+  SetErrorLevel 0
+FunctionEnd
 
 Section "WinPalm (required)" AppFiles
   SectionIn RO

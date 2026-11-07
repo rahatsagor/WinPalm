@@ -28,6 +28,16 @@ enum Outcome {
 }
 
 pub fn run(command: &str, interrupts: Arc<Interrupts>, session: SessionId, epoch: u64) -> Result<(), String> {
+    run_with_report_window(command, interrupts, session, epoch, SHELL_REPORT_WINDOW)
+}
+
+fn run_with_report_window(
+    command: &str,
+    interrupts: Arc<Interrupts>,
+    session: SessionId,
+    epoch: u64,
+    report_window: Duration,
+) -> Result<(), String> {
     let running = RunningCommand::start()?;
     let stopped = move || interrupts.should_stop(session) || interrupts.shell_epoch() != epoch;
     let utf16: Vec<u8> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -35,11 +45,21 @@ pub fn run(command: &str, interrupts: Arc<Interrupts>, session: SessionId, epoch
     let executable = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
         .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
     let application: Vec<u16> = executable.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
-    let mut line: Vec<u16> =
-        format!("\"{}\" -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}", executable.display())
-            .encode_utf16()
-            .chain([0])
-            .collect();
+    // Windows PowerShell 5.1 serializes EncodedCommand errors as CLIXML even
+    // with OutputFormat Text. Decode a base64-only payload inside Command so
+    // arbitrary user text remains safely quoted and errors stay readable.
+    // A script-block invocation hides non-terminating failures from the host;
+    // preserve the original final-command exit status inside that block.
+    let script = format!(
+        "& ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{encoded}')) + [Environment]::NewLine + 'if (-not $?) {{ exit 1 }}'))"
+    );
+    let mut line: Vec<u16> = format!(
+        "\"{}\" -NoLogo -NoProfile -NonInteractive -OutputFormat Text -Command \"{script}\"",
+        executable.display()
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
     let null = inheritable_file("NUL", GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING, 0)
         .ok_or("Couldn't prepare the automation's input and output.")?;
     let errors = error_file();
@@ -141,7 +161,7 @@ pub fn run(command: &str, interrupts: Arc<Interrupts>, session: SessionId, epoch
             drop(job);
             let _ = done.send(outcome);
         });
-        match finished.recv_timeout(SHELL_REPORT_WINDOW) {
+        match finished.recv_timeout(report_window) {
             Ok(Outcome::Stopped) => Err(STOPPED.into()),
             Ok(Outcome::Exited(code)) if code != 0 => {
                 let text = decode(&errors.map(read_errors).unwrap_or_default());
@@ -239,15 +259,23 @@ mod tests {
     fn run_now(command: &str) -> Result<(), String> {
         let interrupts = Arc::new(Interrupts::default());
         let epoch = interrupts.shell_epoch();
-        run(command, interrupts, 1, epoch)
+        // This tests the final error, not PowerShell's cold-start latency on a
+        // busy runner. The app keeps its short, bounded response window.
+        run_with_report_window(command, interrupts, 1, epoch, Duration::from_secs(30))
     }
 
     #[test]
     fn a_failing_powershell_command_says_why() {
-        let error = run_now("Write-Output fine; nosuchcommand-winpalm").unwrap_err();
-        assert!(error.starts_with("The command failed (exit code 1): nosuchcommand-winpalm"), "{error}");
+        // A missing command can trigger unbounded module discovery on a fresh
+        // Windows image. A language-level failure tests stderr deterministically.
+        for command in ["throw 'winpalm-test-error'", "Write-Error 'winpalm-test-error'"] {
+            let error = run_now(command).unwrap_err();
+            assert!(error.starts_with("The command failed (exit code 1): "), "{error}");
+            assert!(error.contains("winpalm-test-error"), "{error}");
+            assert!(!error.contains("<Objs"), "{error}");
+        }
         assert_eq!(run_now("exit 3").unwrap_err(), "The command failed (exit code 3).");
-        run_now("Write-Output fine").unwrap();
+        run_now("'fine'").unwrap();
     }
 
     #[test]

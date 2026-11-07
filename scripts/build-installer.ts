@@ -30,11 +30,12 @@ function peInfo(file: string) {
   if (magic !== 0x20b && magic !== 0x10b) throw new Error(`Unsupported PE format: ${file}`)
   const resource = offset(dword(optional + (magic === 0x20b ? 112 : 96) + 16))
   const entries = (at: number) => Array.from({ length: word(at + 12) + word(at + 14) }, (_, i) => ({ id: dword(at + 16 + i * 8), value: dword(at + 20 + i * 8) }))
-  let value = entries(resource).find(item => item.id === 16)?.value
-  if (value === undefined) throw new Error(`No native executable version: ${file}`)
+  const versionResource = entries(resource).find(item => item.id === 16)?.value
+  if (versionResource === undefined) throw new Error(`No native executable version: ${file}`)
+  let value: number = versionResource
   for (let depth = 0; value & 0x80000000; depth++) {
     if (depth > 3) throw new Error(`Invalid version resource tree: ${file}`)
-    const next = entries(resource + (value & 0x7fffffff))[0]?.value
+    const next: number | undefined = entries(resource + (value & 0x7fffffff))[0]?.value
     if (next === undefined) throw new Error(`Empty version resource: ${file}`)
     value = next
   }

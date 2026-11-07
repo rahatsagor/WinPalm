@@ -562,10 +562,13 @@ fn works_behind_a_reverse_proxy_when_allowed() {
         let welcome = recv(&mut ws).await;
         assert_eq!(welcome["t"], "welcome");
         assert_eq!(welcome["features"]["secure"], true, "HTTPS ended at the proxy still counts");
+        // Inspect the connection while this client is still alive. Dropping
+        // ws at the end of the block can unregister it before the assertion.
+        let devices = f.host.connected_devices();
+        let device = devices.first().expect("the paired proxy connection is active");
+        assert_eq!(device.address, "fd00:8::42");
+        assert!(device.secure);
     });
-    let device = &f.host.connected_devices()[0];
-    assert_eq!(device.address, "fd00:8::42");
-    assert!(device.secure);
 }
 
 #[test]

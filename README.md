@@ -6,115 +6,194 @@
 
 ### Your PC, in your palm.
 
-Turn your phone into a Windows trackpad, keyboard and shortcut deck.<br />
+Turn your iPhone, iPad or Android phone into a wireless mouse, trackpad,<br />
+keyboard and shortcut deck for Windows.<br />
 **No phone app. No account. Your controls stay on your network.**
 
-<a href="https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe"><img src="https://img.shields.io/badge/Download_for_Windows-f9813d?style=for-the-badge&logo=windows&logoColor=white" alt="Download WinPalm setup for Windows" height="36" /></a>
+<br />
+
+<a href="https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe"><img src="https://img.shields.io/badge/Download_for_Windows-f9813d?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" height="36" /></a>
 &nbsp;
 <a href="https://winpalm.rsapplication.com"><img src="https://img.shields.io/badge/Website-1f1f1f?style=for-the-badge&logo=googlechrome&logoColor=white" alt="WinPalm website" height="36" /></a>
+&nbsp;
+<a href="https://winpalm.rsapplication.com/docs/"><img src="https://img.shields.io/badge/Docs-1f1f1f?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Documentation" height="36" /></a>
+
+<br />
 
 [![Latest release](https://img.shields.io/github/v/release/rahatsagor/WinPalm?style=flat-square&label=release&color=f9813d)](https://github.com/rahatsagor/WinPalm/releases/latest)
-[![x64 and ARM64](https://img.shields.io/badge/Windows-x64%20%2B%20ARM64-1f1f1f?style=flat-square)](#requirements)
+[![CI](https://img.shields.io/github/actions/workflow/status/rahatsagor/WinPalm/ci.yml?branch=main&style=flat-square&label=checks)](https://github.com/rahatsagor/WinPalm/actions/workflows/ci.yml)
+[![Windows x64 and ARM64](https://img.shields.io/badge/Windows-x64%20%2B%20ARM64-1f1f1f?style=flat-square)](#requirements)
 [![AGPL-3.0 License](https://img.shields.io/badge/license-AGPL--3.0-1f1f1f?style=flat-square)](LICENSE)
 
-**Using a Mac? Meet [CmdPalm](https://cmdpalm.app), the original macOS app.**<br />
-[CmdPalm on GitHub](https://github.com/rahatsagor/CmdPalm) · [WinPalm website](https://winpalm.rsapplication.com)
+**Using a Mac? Meet [CmdPalm](https://cmdpalm.app), also from RS Application.**<br />
+[CmdPalm on GitHub](https://github.com/rahatsagor/CmdPalm) · [WinPalm guides](https://winpalm.rsapplication.com/guides/)
+
+<br />
+
+<a href="https://winpalm.rsapplication.com/#film"><img src="https://winpalm.rsapplication.com/assets/film-poster.jpg" width="800" alt="WinPalm: phone to PC remote control. Watch the launch film." /></a>
+
+<sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 86-second launch film</a> · <a href="https://winpalm.rsapplication.com">Try the interactive demo</a></sub>
 
 </div>
 
 ## Install and connect
 
-1. Download **[WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** and run it. It automatically chooses the native x64 or ARM64 app and includes its .NET runtime.
-2. Open WinPalm from Start. When Windows Firewall asks, allow it on your **Private** home network.
-3. Keep your phone and PC on that network, then scan WinPalm's QR code with the phone camera. You can also open the displayed address and enter its PIN, or request approval on the PC.
-4. Add the page to your phone's home screen for an app-like experience.
+1. **[Download WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** and run it. One installer chooses the native x64 or ARM64 app and includes its .NET runtime. No administrator access or separate runtime installation is needed.
+2. **Open WinPalm** from Start. Allow Windows Firewall on your **Private** home network, and keep your phone and PC on that network.
+3. **Scan the QR code** with your phone camera. You can also open the displayed address and enter its PIN, or request approval on the PC.
+4. **Add to your phone's home screen** for an app-like experience.
 
-The installer works for your Windows account without administrator access. It adds a Start menu shortcut; a desktop shortcut and sign-in startup are optional. Closing the settings window keeps WinPalm in the notification area. Quit or pause control from its tray menu. **Ctrl + Alt + Pause** also toggles control if that shortcut is available.
+Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Closing the window keeps WinPalm in the notification area; reopen, pause or quit it from the tray. **Ctrl + Alt + Pause** toggles control when that shortcut is available.
 
-The initial release is unsigned. If SmartScreen shows **Windows protected your PC**, inspect the source/download and use **More info → Run anyway** if you trust it. Smart App Control can block unsigned apps without an individual override. Authenticode signing and Windows reputation approval are not complete.
+The first release is **unsigned**. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway** only if you trust the download. Smart App Control can block unsigned apps without an individual override. See the [installation docs](https://winpalm.rsapplication.com/docs/) for setup and troubleshooting.
 
-### Prefer a portable copy?
+<details>
+<summary><strong>Prefer a portable copy?</strong></summary>
 
-Download the matching `WinPalm-0.1.0-win-x64.zip` or `WinPalm-0.1.0-win-arm64.zip` from [Releases](https://github.com/rahatsagor/WinPalm/releases/latest), extract the **whole ZIP** to a permanent folder and open `WinPalm.exe`. Keep `winpalm_core.dll`, `web/` and `Resources/` alongside it. Check your processor under **Settings → System → About → System type**.
+Download the matching `win-x64.zip` or `win-arm64.zip` from [Releases](https://github.com/rahatsagor/WinPalm/releases/latest), extract the **whole ZIP** to a permanent folder and open `WinPalm.exe`. Keep `winpalm_core.dll`, `web/` and `Resources/` alongside it. Your architecture is listed in **Settings → System → About → System type**.
 
-If you used a private development preview, quit that copy before installing 0.1.0. Preview versions used internal version numbers that do not follow the public release sequence, so this first public installation is manual. Your private device data is kept in the same per-user folder.
+If you used a private development preview, quit it and install 0.1.0 manually once. Preview version numbers do not follow the public release sequence. Existing private device data stays in the same per-user folder.
 
-## What you can do
+</details>
 
-| Control | Features |
-| --- | --- |
-| Trackpad | Tap, right-click, drag, drag lock, three-finger drag, two-finger scroll, momentum, a one-thumb scroll strip, pinch zoom and configurable finger gestures. |
-| Keyboard | The PC's active layout, left/right modifiers, function and media keys, Unicode text, keystroke typing and clipboard paste with restoration. A sideways keyboard fills an upright phone. |
-| Custom keyboards | Hold several keys at once for games, slides and editing. Arrange your own layouts and reorder their tabs. |
-| Shortcut Deck | Shared pages of shortcuts, snippets, apps, websites, clicks and multi-step actions. Reorder tabs/buttons, resize the buttons, and import/export from the PC. |
-| Apps and media | Discover Start Menu, Store and portable apps; launch, switch, minimize and request a graceful close. Control playback, volume, mute and supported display brightness. |
-| Multiple devices | QR/PIN/PC-approval pairing, revocation, per-device settings, and selective copying of settings or individual custom keyboards. |
-| Local voice typing | Stream the phone microphone to a compatible installed offline Windows recognizer over trusted HTTPS. Check setup under General. |
+## Everything you need from the couch
 
-Modifier keys press and release like a real keyboard: tap Win by itself to open Start, or hold Ctrl while another finger presses a letter. **Sticky shortcut modifiers**, in the phone's keyboard settings, optionally enable tap-for-next-key and double-tap-to-lock. Custom keyboard modifiers always follow your finger.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-PowerShell is **off by default**. Enable it under Automations only for devices you trust. Commands use your user permissions, run without a profile, and are stopped by Pause, disconnect, command-disable or a five-minute timeout. A finished command's launched apps stay open. Imported decks do not enable command execution.
+<img src="https://winpalm.rsapplication.com/assets/poster-trackpad.jpg" width="100%" alt="WinPalm phone trackpad with an illustrated Windows scrolling response" />
+
+#### Trackpad
+Tap to click, right-click, drag, drag lock and three-finger drag. Scroll with two fingers, momentum or a one-thumb strip. Pinch to zoom and assign your own finger gestures.
+
+</td>
+<td width="50%" valign="top">
+
+<img src="https://winpalm.rsapplication.com/assets/poster-keyboard.jpg" width="100%" alt="WinPalm Windows keyboard and illustrated PC typing" />
+
+#### Keyboard
+Your PC's active layout, left and right modifiers, function and media keys, Unicode typing and clipboard paste with restoration. A sideways keyboard fills an upright phone. Tap Win to open Start, or hold Ctrl while another finger presses a letter.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+<img src="https://winpalm.rsapplication.com/assets/poster-custom.jpg" width="100%" alt="A custom WinPalm keyboard for gaming" />
+
+#### Custom keyboards
+Build the controls you need for games, presentations and editing. Hold several keys at once; each stays pressed while you touch it. Edit the layout and drag tabs to reorder your keyboards.
+
+</td>
+<td valign="top">
+
+<img src="https://winpalm.rsapplication.com/assets/poster-deck.jpg" width="100%" alt="WinPalm shortcut Deck with illustrated Windows actions" />
+
+#### Shortcut Deck
+A button grid for shortcuts, snippets, apps, websites, clicks and multi-step actions. Resize buttons, reorder pages, and import or export from the PC. PowerShell actions are available when you enable them.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+<img src="https://winpalm.rsapplication.com/assets/poster-apps-media.jpg" width="100%" alt="WinPalm apps and media controls with illustrated PC responses" />
+
+#### Apps and media
+Find Start Menu, Store and portable apps. Launch, switch, minimize and request a graceful close. Control playback, volume, mute and supported display brightness.
+
+</td>
+<td valign="top">
+
+<img src="https://winpalm.rsapplication.com/assets/poster-voice.jpg" width="100%" alt="WinPalm voice typing with an illustrated Windows transcription" />
+
+#### Local voice typing
+Speak into your phone and let a compatible installed Windows recognizer type on the PC. Audio stays on your network. Requires trusted HTTPS and a supported offline speech language; check setup in General.
+
+</td>
+</tr>
+</table>
+
+<sub>Images come from the launch film: WinPalm phone UI with illustrated PC responses, without live Windows footage.</sub>
+
+Pair multiple phones and tablets. Settings, custom keyboards and gestures are backed up on the PC for each device. **Copy settings from another device** lets you select individual settings sections and keyboards. Deck pages are shared across paired devices.
+
+For slides, use large arrow keys. For games, make a WASD layout. For movie night, keep playback and volume within reach. For editing and streaming, put your repeated shortcuts on a Deck page. Explore the [guides](https://winpalm.rsapplication.com/guides/) for more ideas.
+
+## Private by design
+
+- **No accounts or analytics.** Phone controls connect directly to your PC over your local network.
+- **Pair devices you trust.** Use QR, PIN or explicit PC approval; revoke a device from Windows at any time.
+- **You stay in control.** Pause releases held input and stops running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
+- **Your setup stays on your PC.** Pairings, settings, Deck pages, custom keyboards and certificates live under `%LOCALAPPDATA%\RS Application\WinPalm`.
+
+Use trusted HTTPS where network traffic could be observed. HTTP does not encrypt input or reconnect tokens. Update checks contact GitHub and can be turned off. Using your phone keyboard's own dictation follows the phone provider's privacy settings. See [SECURITY.md](SECURITY.md) for the full model.
 
 ## Requirements
 
-- **Windows 11 recommended**, on x64 Intel/AMD or ARM64 hardware. The installer accepts Windows 10 version 1809 or later, but Windows 10 and every PC/driver combination have not been certified. There is no 32-bit app.
-- iOS/iPadOS 17+ or a current Android browser.
-- A shared private LAN, with Windows Firewall allowing WinPalm. The server does not need a public internet port.
-- Trusted HTTPS and a compatible installed offline speech recognizer for WinPalm's microphone feature.
+- **Windows 11 recommended**, on Intel/AMD x64 or ARM64. Setup accepts Windows 10 version 1809 or later; every older Windows/driver combination has not been verified. There is no 32-bit app.
+- **iOS/iPadOS 17+**, or a current Android browser.
+- **A shared private network**, with Windows Firewall allowing WinPalm. No public internet port is needed.
+- **For voice typing:** trusted HTTPS and a compatible installed offline Windows speech recognizer.
 
-Windows protects UAC prompts, the lock screen and higher-integrity applications. WinPalm uses normal user permissions; return to a normal desktop app to resume remote input. Some games, protected media apps and remote desktop software reject synthetic input. App activation follows Windows foreground rules. Brightness and seeking controls depend on the display, driver and app.
-
-Windows equivalents include Task View for Mission Control, Start for Launchpad, Windows Search for Spotlight, virtual desktops for Spaces, minimize/close for hide/quit, and Ctrl shortcuts for Command shortcuts. Pinch zoom uses Ctrl and fine wheel steps or Ctrl+/Ctrl−. macOS rotation, Look Up and universal keyboard-backlight control are unavailable.
-
-## HTTPS and voice typing
-
-Ordinary controls work over HTTP on a trusted private LAN. Phone browsers require trusted HTTPS for microphone access.
-
-1. Open **Phone setup** on the PC and export `WinPalm.crt`.
-2. Transfer that public certificate privately to the phone. Install/trust it and verify its SHA-256 fingerprint against the PC. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**.
-3. Select **Use an encrypted HTTPS connection** on Connect and scan that QR code.
-4. Open **General → Check speech setup**. It checks the offline recognizer, dictation grammar and audio input using silence, without typing anything. The installed speech languages and any last startup problem appear in General.
-5. On the phone, choose **Keyboard → Type**, tap the microphone and allow microphone access.
-
-If Windows cannot start recognition, the phone now identifies the failing stage and Windows error code. Install or repair a compatible offline speech language in Windows Settings, then restart WinPalm. The phone's language may differ from the installed Windows language; WinPalm uses the closest installed recognizer. Recognition quality and language support depend on that recognizer.
-
-Android browser trust for user-installed certificates varies. Resolve certificate warnings before using the microphone. Keep the private CA key on the PC and remove the phone's certificate trust when you stop using WinPalm. Voice from this microphone feature is recognized on the PC, without a transcription service.
-
-You can also use your phone keyboard's own dictation to enter the Type field. That uses the phone's dictation provider and privacy settings.
+WinPalm runs with normal user permissions. UAC prompts, the lock screen and higher-integrity apps are protected by Windows. Some games and remote desktop apps reject synthetic input; media seeking, brightness and app activation depend on Windows, the app and hardware support.
 
 ## Updates
 
-WinPalm checks GitHub once a day and notifies you when a newer stable release is available. Turn automatic checks off in General or Updates, or choose **Check for updates** from the tray at any time. Checks contact GitHub without sending input, settings or device lists.
+WinPalm checks GitHub once a day for a newer stable release and shows a notification. Turn automatic checks off in General or Updates, or choose **Check for updates** from the tray.
 
-Choose **Download and restart** in Updates to verify the native package, replace this copy and reopen WinPalm. Phones reconnect using their existing pairings. Settings, Deck pages, custom keyboards and certificates stay in the private data folder. Replacement failures, or a new process that exits before confirming startup, restore the previous package. A live process that does not confirm startup is left running with its backup retained for recovery.
+Choose **Download and restart** to verify the native package, replace the app and reopen it. Installed and portable copies use the same updater. Pairings, settings, Deck pages, custom keyboards and certificates are retained. Replacement failures, or a new process exiting before startup confirmation, restore the previous package.
 
-The same updater works for installed and portable copies in a writable local folder. For a network drive, a read-only or linked folder, or a release without the matching ZIP/checksum, use **Open GitHub releases** and install manually. Drafts and prereleases do not notify installed apps.
+You can also download and run the latest **[WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** over your installation. Use this route for read-only, network or linked app folders, or when an in-app update is unavailable. Drafts and prereleases are excluded from automatic checks.
 
-## Troubleshooting and checks
+## Docs and troubleshooting
 
-If the phone cannot connect, check both devices' network, the Windows Private network profile and Windows Firewall. WinPalm's Connect page offers a link when it detects a Public profile or a blocking firewall rule. Use a custom address in Advanced for your VPN or reverse proxy. Forwarded headers are trusted only from loopback after the owner enables the option. Do not forward WinPalm's port to the public internet.
+Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for installation, pairing, HTTPS, voice typing and settings. The **[guides](https://winpalm.rsapplication.com/guides/)** cover everyday workflows.
 
-Run **Test-WinPalm.cmd** from the installed or portable app folder for disposable checks of the native DLL, storage, icons, server, pairing and pause/revocation. It also offers an input test in a temporary editor. Leave the PC idle during the input test. Reports are saved to `%TEMP%\WinPalm-selftest.json` and `%TEMP%\WinPalm-input-test.json`; they do not contain pairing secrets.
+- **Phone cannot connect:** check the shared network, Windows Private profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
+- **Microphone unavailable:** export the public certificate from Phone setup, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
+- **Speech will not start:** choose **General → Check speech setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
+- **Need a diagnostic report:** run **Test-WinPalm.cmd** from the app folder. Its disposable checks cover the native DLL, storage, icons, server, pairing and pause/revocation. The optional input test uses a temporary editor; leave the PC idle while it runs.
 
-Behavior can vary with Windows versions, speech languages, drivers and the receiving app. Run the diagnostic checks on your own hardware; automated tests and cross-builds do not certify every PC and phone combination. Report your Windows version, architecture, keyboard layout and phone/browser when [opening an issue](https://github.com/rahatsagor/WinPalm/issues).
+Reports are saved to `%TEMP%\WinPalm-selftest.json` and `%TEMP%\WinPalm-input-test.json`. When [reporting a bug](https://github.com/rahatsagor/WinPalm/issues), include your Windows version, architecture, keyboard layout and phone/browser. Hardware and speech behavior require checks on the actual PC.
 
-## Build from source
+## Build and contribute
 
-Install Git, Bun, stable Rust with the MSVC toolchain, .NET 10 SDK, and Visual Studio Build Tools with Desktop development with C++. ARM64 builds also need the matching ARM64 tools/Windows SDK. In PowerShell 7:
+Install Git, **Bun**, stable Rust with the MSVC toolchain, the .NET SDK selected in [global.json](global.json), and Visual Studio Build Tools with Desktop development with C++. ARM64 builds need the corresponding C++ tools and Windows SDK. In PowerShell 7:
 
 ```powershell
 ./scripts/build.ps1 -Architecture x64 -Package
 ./scripts/build.ps1 -Architecture arm64 -Package
-# After both packages exist, with NSIS 3 (makensis) installed:
+# With NSIS 3.10+ installed, combine both native payloads into one setup:
 bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.1.0-Setup.exe
 ```
 
-The universal setup selects the PC's native architecture. Portable ZIPs remain separate for the in-app updater. All caches and build products go to `../winpalm-dev/` by default; `-DevelopmentDirectory` chooses another folder. Each package serves its corresponding source ZIP and license from phone Settings.
+Builds, dependencies, caches and local reports go to `../winpalm-dev/`. The source repository contains the app, tests, packaging and public project documentation. Release assets are distributed through GitHub Releases. Each app package includes its corresponding source and licenses.
 
-The GitHub workflow builds and checks native x64/ARM64 packages, compiles the setup EXE and prepares a draft release. See [CONTRIBUTING.md](CONTRIBUTING.md), [the release guide](docs/RELEASING.md), [SECURITY.md](SECURITY.md) and [the protocol](docs/PROTOCOL.md).
+Future releases follow CmdPalm's routine: update the changelog, run **`bun scripts/bump-version.ts VERSION`**, commit and push, then tag **`vVERSION`**. The release workflow runs native x64/ARM64 checks, builds setup, verifies checksums and publishes the release. See [CONTRIBUTING.md](CONTRIBUTING.md), [the release guide](docs/RELEASING.md) and [the protocol](docs/PROTOCOL.md).
 
-## Also from RS Application
+## Using a Mac? Meet CmdPalm.
 
-**[CmdPalm](https://cmdpalm.app)** brings the same phone-to-computer idea to macOS, with native Mac input and integrations. If you use both Windows and a Mac, use WinPalm for the PC and CmdPalm for the Mac. [Explore CmdPalm on GitHub](https://github.com/rahatsagor/CmdPalm).
+<table>
+<tr>
+<td width="140" align="center">
+<a href="https://cmdpalm.app"><img src="https://winpalm.rsapplication.com/cmdpalm-icon.svg" width="112" height="112" alt="CmdPalm app icon" /></a>
+</td>
+<td>
 
-WinPalm is built by **RS Application**, adapting CmdPalm 0.7.0's Rust engine and Vue phone client for Windows. See [NOTICE](NOTICE) for provenance. Licensed under [AGPL-3.0-only](LICENSE).
+**Your Mac, in your palm.**
+
+[CmdPalm](https://cmdpalm.app) brings the same phone-to-computer idea to macOS, with native Mac input and integrations. Use your phone as a Mac trackpad, keyboard and shortcut deck. If you use both platforms, WinPalm handles the PC and CmdPalm handles the Mac.
+
+**[Explore CmdPalm](https://cmdpalm.app)** · [Documentation](https://cmdpalm.app/docs/) · [GitHub](https://github.com/rahatsagor/CmdPalm)
+
+</td>
+</tr>
+</table>
+
+## License
+
+Built by **[RS Application](https://rsapplication.com)**. WinPalm adapts CmdPalm 0.7.0's Rust engine and Vue phone client for Windows. See [NOTICE](NOTICE) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licenses.
+
+Licensed under **[AGPL-3.0-only](LICENSE)**.
