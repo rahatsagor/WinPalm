@@ -13,6 +13,9 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>Resources\WinPalm.ico</ApplicationIcon>
     <Version>0.1.0</Version>
+    <!-- Keep product metadata identical across the app, core DLL and NSIS files. -->
+    <InformationalVersion>$(Version).0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Company>RS Application</Company>
     <Product>WinPalm</Product>
     <Copyright>Copyright © RS Application. AGPL-3.0-only.</Copyright>

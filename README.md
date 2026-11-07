@@ -65,7 +65,7 @@ keyboard and shortcut deck for Windows.<br />
 
 Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Closing the window keeps WinPalm in the notification area; reopen, pause or quit it from the tray. **Ctrl + Alt + Pause** toggles control when that shortcut is available.
 
-The first release is **unsigned**. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway** only if you trust the download. Smart App Control can block unsigned apps without an individual override. See the [installation docs](https://winpalm.rsapplication.com/docs/) for setup and troubleshooting.
+The first release is **unsigned**. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway** only if you trust the download. Smart App Control can block unsigned apps without an individual override. See the [installation docs](https://winpalm.rsapplication.com/docs/) for setup and troubleshooting, and the [Code signing policy](docs/CODE_SIGNING_POLICY.md) for planned SignPath Foundation signing and its current status.
 
 <details>
 <summary><strong>Prefer a portable copy?</strong></summary>

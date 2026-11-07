@@ -34,8 +34,8 @@ SetDatablockOptimize on
 CRCCheck force
 BrandingText "RS Application"
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey /LANG=1033 "ProductName" "WinPalm Setup"
-VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
+VIAddVersionKey /LANG=1033 "ProductName" "WinPalm"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}.0"
 VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "WinPalm installer for x64 and ARM64 Windows"
 VIAddVersionKey /LANG=1033 "CompanyName" "RS Application"
@@ -56,10 +56,21 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright RS Application. AGPL-3.0-
 !define MUI_FINISHPAGE_LINK "Visit winpalm.rsapplication.com"
 !define MUI_FINISHPAGE_LINK_LOCATION "https://winpalm.rsapplication.com"
 !insertmacro MUI_PAGE_FINISH
+!ifndef IMPORT_UNINSTALLER
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
+!endif
 !insertmacro MUI_LANGUAGE "English"
+
+; Export once, sign outside makensis, then import that exact uninstaller.
+!ifdef EXPORT_UNINSTALLER
+  !ifdef HOST_WINDOWS
+    !uninstfinalize 'cmd /C copy /Y "%1" "${EXPORT_UNINSTALLER}" >nul' = 0
+  !else
+    !uninstfinalize 'cp "%1" "${EXPORT_UNINSTALLER}"' = 0
+  !endif
+!endif
 
 Var NativeArchitecture
 
@@ -133,15 +144,19 @@ Function ${PREFIX}CloseWinPalm
 FunctionEnd
 !macroend
 !insertmacro CloseWinPalm ""
+!ifndef IMPORT_UNINSTALLER
 !insertmacro CloseWinPalm "un."
+!endif
 
 Function .onInstSuccess
   SetErrorLevel 0
 FunctionEnd
 
+!ifndef IMPORT_UNINSTALLER
 Function un.onUninstSuccess
   SetErrorLevel 0
 FunctionEnd
+!endif
 
 Section "WinPalm (required)" AppFiles
   SectionIn RO
@@ -158,7 +173,11 @@ Section "WinPalm (required)" AppFiles
     File /r "${X64_DIR}\*"
   ${EndIf}
   File /oname=NSIS-LICENSE.txt "NSIS-LICENSE.txt"
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  !ifdef IMPORT_UNINSTALLER
+    File /oname=Uninstall.exe "${IMPORT_UNINSTALLER}"
+  !else
+    WriteUninstaller "$INSTDIR\Uninstall.exe"
+  !endif
   CreateDirectory "$SMPROGRAMS\WinPalm"
   CreateShortcut "$SMPROGRAMS\WinPalm\WinPalm.lnk" "$INSTDIR\WinPalm.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "WinPalm"
@@ -182,6 +201,7 @@ Section /o "Start WinPalm when I sign in" StartAtLogin
   WriteRegStr HKCU "${RUN_KEY}" "WinPalm" '$\"$INSTDIR\WinPalm.exe$\" --start-minimized'
 SectionEnd
 
+!ifndef IMPORT_UNINSTALLER
 Section "Uninstall"
   SetShellVarContext current
   SetRegView 64
@@ -208,3 +228,4 @@ Section "Uninstall"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
   RMDir "$INSTDIR" ; succeeds only when no unrelated files remain
 SectionEnd
+!endif

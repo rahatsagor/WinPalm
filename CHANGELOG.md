@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prepare SignPath Foundation release signing for both native architectures, the uninstaller and universal setup, with public policy and signature verification. Activation requires program approval and account setup.
+
 ## [0.1.0] - 2026-11-08
 
 The first public WinPalm release, built by RS Application and adapted from CmdPalm for Windows.

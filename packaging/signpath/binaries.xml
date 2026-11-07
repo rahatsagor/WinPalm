@@ -1,0 +1,23 @@
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <!-- actions/upload-artifact wraps these five files in a ZIP. -->
+  <zip-file>
+    <pe-file path="x64/WinPalm.exe" product-name="WinPalm" company-name="RS Application" product-version="${version}.0" file-version="${version}.0">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="x64/winpalm_core.dll" product-name="WinPalm" company-name="RS Application" product-version="${version}.0" file-version="${version}.0">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="arm64/WinPalm.exe" product-name="WinPalm" company-name="RS Application" product-version="${version}.0" file-version="${version}.0">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="arm64/winpalm_core.dll" product-name="WinPalm" company-name="RS Application" product-version="${version}.0" file-version="${version}.0">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="uninstaller/Uninstall.exe" product-name="WinPalm" company-name="RS Application" product-version="${version}.0" file-version="${version}.0">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

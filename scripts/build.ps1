@@ -71,6 +71,12 @@ try {
     foreach ($Name in @('LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','README.md','SECURITY.md')) { Copy-Item (Join-Path $Root $Name) $Output -Force }
     Copy-Item (Join-Path $Root 'packaging/Test-WinPalm.cmd') $Output -Force
     if (!(Test-Path (Join-Path $Output 'WinPalm.exe')) -or !(Test-Path (Join-Path $Output 'winpalm_core.dll')) -or !(Test-Path (Join-Path $Output 'web/index.html'))) { throw 'Incomplete Windows package' }
+    foreach ($Name in @('WinPalm.exe','winpalm_core.dll')) {
+        $Info = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $Output $Name))
+        if ($Info.ProductName -ne 'WinPalm' -or $Info.CompanyName -ne 'RS Application' -or $Info.FileVersion -ne "$Version.0" -or $Info.ProductVersion -ne "$Version.0") {
+            throw "Missing or incorrect signing metadata in $Name"
+        }
+    }
     if ($Architecture -eq $([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant())) {
         $Report = Join-Path $Dev "artifacts/self-test-$Architecture.json"
         $Process = Start-Process (Join-Path $Output 'WinPalm.exe') -ArgumentList @('--self-test','--report',('"' + $Report + '"')) -Wait -PassThru

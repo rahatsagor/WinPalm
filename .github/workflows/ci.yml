@@ -53,6 +53,11 @@ jobs:
       - name: Build, test and verify native package
         shell: pwsh
         run: ./scripts/build.ps1 -Architecture '${{ matrix.architecture }}' -DevelopmentDirectory "$env:RUNNER_TEMP/winpalm-dev" -Package
+      - name: Check signature verification with disposable test certificates
+        shell: pwsh
+        run: |
+          $Version = (Get-Content web/package.json -Raw | ConvertFrom-Json).version
+          ./scripts/test-signatures.ps1 -PackageDirectory "$env:RUNNER_TEMP/winpalm-dev/artifacts/builds/${{ matrix.architecture }}" -Version $Version
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: winpalm-package-${{ matrix.architecture }}

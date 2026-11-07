@@ -4,6 +4,8 @@ WinPalm uses the same release routine as CmdPalm: bump versions, write the chang
 
 The public version sequence starts at **0.1.0**. Private development-preview numbers are outside that sequence. Publishing credentials and signing material belong in GitHub settings, never in the source repository.
 
+**Before the next release:** complete the free SignPath Foundation onboarding in [SIGNPATH.md](SIGNPATH.md), configure its secret/variables, and pass a test-signing rehearsal. The existing 0.1.0 release remains unsigned. New production releases have no unsigned fallback; absent signing credentials stop the run before native builds begin.
+
 ## Prepare a release
 
 From a clean `main` checkout, after implementing the changes:
@@ -31,13 +33,14 @@ Use `0.1.0` instead for the initial release. Do not move a published tag or repl
 
 1. Validates the `vN.N.N` tag, changelog, all recorded versions and the updater's repository. Resolves the tag to an exact source commit.
 2. Calls the same CI workflow used for `main` and pull requests. Native x64 and ARM64 Windows runners check phone lint/tests/build, release-script regressions, Rust format/Clippy/tests, host regressions, self-contained .NET publishing, the packaged Windows self-test and archive/binary validation.
-3. Reuses those checked packages, verifies their checksums and compiles a universal setup EXE with NSIS 3.10+. Confirms the stable and versioned setup files are byte-identical.
-4. Runs the actual setup on fresh x64 and ARM64 Windows runners. Checks the default installation, Start menu shortcut, installed app integration checks, native architecture, graceful replacement of a running tray app, uninstall and preservation of private app data.
-5. Creates checksums, generates release notes from `CHANGELOG.md`, uploads the complete download set to a draft and then publishes it as the latest stable release. Website, docs, guides, film and CmdPalm links are included in the notes.
+3. Reuses those checked packages, verifies their checksums and exports an NSIS uninstaller. Submits the two app EXEs, two core DLLs and uninstaller to SignPath's `binaries` configuration. Waits up to 30 minutes for the maintainer's manual approval.
+4. Repackages the returned signed app binaries into both native portable/update ZIPs and embeds those same app files and signed uninstaller in the universal setup. Submits setup to SignPath's `setup` configuration and waits for the second approval. Copies the signed setup to the stable alias and generates all checksums after signing.
+5. Checks signatures on native Windows runners: production files must have valid, timestamped SignPath Foundation signatures and the expected WinPalm product/version metadata. Runs the actual setup on x64 and ARM64, verifies installed/portable binaries match the exact returned signed bytes, and checks default installation, Start menu shortcut, installed app integration, native architecture, graceful replacement of a running tray app, uninstall and preservation of private app data.
+6. Generates release notes from `CHANGELOG.md`, including the signing policy/attribution, uploads the complete download set to a draft and then publishes it as the latest stable release. Website, docs, guides, film and CmdPalm links are included in the notes. Test-signing rehearsals never execute this publishing job.
 
 Only the publishing job has repository write permission. Build products, dependency caches and diagnostic reports stay in the runner's temporary directory or short-lived Actions artifacts. They are never committed.
 
-To retry a failed release, rerun its workflow or run **Release → Run workflow** with the existing tag. A failed draft can be completed. The workflow refuses to overwrite an already published release.
+To retry a failed release, rerun its workflow or run **Release → Run workflow** on `main` with the existing version tag and **test_signing unchecked**. A failed draft can be completed. The workflow refuses to overwrite an already published release. For onboarding, the manual workflow defaults to `main` and **test_signing checked**, which uses a test policy and never publishes. Start production runs when the approver can review both signing requests.
 
 GitHub native self-tests establish those automated checks on the runner. The setup checks cover silent installation on hosted Windows runners. Actual phone gestures, microphone recognition quality, interactive setup and physical-device behavior still need hardware checks.
 
@@ -59,7 +62,7 @@ Keep both native ZIP/checksum pairs on every stable release. The in-app updater 
 
 The setup selects the PC's native architecture, includes its .NET runtime and installs per user without elevation. It creates a Start menu shortcut and offers desktop and sign-in shortcuts. Re-running setup replaces a recognizable installation. A new installation requires a new or empty folder. Uninstall removes managed program files and retains private pairings, settings and certificates.
 
-Initial releases are unsigned. Checksums detect corruption against the release metadata; they are not publisher signatures. Authenticode signing and independent signed update metadata remain future work. See [SECURITY.md](../SECURITY.md#updates).
+Release 0.1.0 is unsigned; SignPath signing is prepared for subsequent releases after onboarding. Checksums detect corruption against the release metadata and are separate from Authenticode signatures. The updater does not independently enforce a signing identity or signed update metadata on the PC. See [SECURITY.md](../SECURITY.md#updates) and the [Code signing policy](CODE_SIGNING_POLICY.md).
 
 ## Build locally on Windows
 
@@ -72,6 +75,8 @@ bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --outp
 ```
 
 `-DevelopmentDirectory` chooses a different output folder outside the source tree. `MAKENSIS` overrides the NSIS compiler path. The installer compiler can run on Windows, Linux or macOS; installation behavior must be checked on Windows.
+
+The native Rust DLL embeds WinPalm's Windows version resource for signing restrictions. Native Windows builds use the Windows SDK resource compiler. Cross-compilation from macOS/Linux additionally needs LLVM's `llvm-rc` on `PATH`, or `RC_PATH` set to that compiler's full path; install LLVM through your platform's package manager before a cross-build. This is a build dependency only.
 
 ## Installation and update acceptance
 
