@@ -4,7 +4,7 @@ This prepares WinPalm for the **free open-source program**, not a paid subscript
 
 ## Application details
 
-Apply at **https://signpath.org/apply**. Use the information below wherever the application asks for project details. The public application page does not expose a stable field list, so this is a ready-to-use project brief, not a reproduction of its form.
+Apply at **https://signpath.org/apply**. The embedded application form was checked in a browser on **8 November 2026**. Use the project brief and field-by-field answers below. The maintainer supplies their personal account details and accepts the required terms and data-processing consent directly in the form.
 
 | Item | Value |
 | --- | --- |
@@ -26,9 +26,40 @@ Apply at **https://signpath.org/apply**. Use the information below wherever the 
 | Signing scope | Four native PE files, one generated NSIS uninstaller, then one universal NSIS setup EXE |
 | Contact | Use the maintainer's own SignPath account email. No personal contact details or API tokens belong in this file. |
 
-Suggested description:
+### Answers for the application form
 
-> WinPalm is a free, open-source Windows tray app that turns an iPhone, iPad or Android browser into a trackpad, keyboard and shortcut deck for a Windows PC. Pairing and device control work over the user's network. Optional speech recognition uses installed Windows components. The app installs per user without administrator access and includes an explicit uninstall flow and owner-controlled updates from GitHub Releases. It is maintained by RS Application and licensed under AGPL-3.0-only. WinPalm adapts the same maintainer's CmdPalm project for Windows, with provenance recorded in NOTICE. We request free Foundation signing for the native x64/ARM64 app and library, generated uninstaller and universal setup, built from this repository by GitHub-hosted Actions runners.
+| Form field | Answer |
+| --- | --- |
+| Project Name (required) | WinPalm |
+| Repository URL (required) | https://github.com/rahatsagor/WinPalm |
+| Homepage URL (required) | https://winpalm.rsapplication.com |
+| Download URL | https://github.com/rahatsagor/WinPalm#install-and-connect |
+| Privacy Policy URL | https://github.com/rahatsagor/WinPalm/blob/main/SECURITY.md#data-and-privacy |
+| Wikipedia URL (optional) | Leave blank unless the project has an English Wikipedia article. |
+| Tagline (required) | Turn your phone browser into a wireless trackpad, keyboard and shortcut deck for Windows. |
+| Category (required) | Choose the closest offered category for a desktop utility / remote control app. |
+| Description (required) | Use the short description below. |
+| Reputation (required) | Use the honest launch-evidence paragraph below, adding any genuine coverage or community links you have. |
+| Maintainer Type | Choose the option matching your actual individual/organization status. RS Application is the app's public brand. |
+| Build System (required) | GitHub Actions |
+| First Name, Last Name, Email (required) | Your own name and the email you want for the SignPath account. |
+| Company Name (optional) | RS Application, if applicable to your organization; otherwise leave blank. |
+| Primary Discovery Channel (required) | Select the channel through which you learned about the program. |
+| Please specify the exact source (optional) | Provide the actual source if you wish. |
+
+The Download URL above leads to a download page that already names the planned SignPath Foundation integration and links the policy. It also states that 0.1.0 remains unsigned. Use a page URL here, not the direct EXE link, because SignPath asks for a page mentioning the signing arrangement.
+
+**Description:**
+
+> WinPalm is a free, open-source Windows tray app that turns a phone or tablet browser into a wireless trackpad, keyboard and shortcut deck for a PC. It pairs devices over the user's network, keeps settings on the PC and supports optional local Windows speech recognition. No phone app or user account is required. WinPalm is the Windows companion to CmdPalm, maintained by RS Application and licensed under AGPL-3.0-only.
+
+**Reputation:**
+
+> WinPalm is a newly launched open-source project. Its first public release is available at https://github.com/rahatsagor/WinPalm/releases/tag/v0.1.0, with source history at https://github.com/rahatsagor/WinPalm and native x64/ARM64 build and test results at https://github.com/rahatsagor/WinPalm/actions. Public documentation and guides are available at https://winpalm.rsapplication.com/docs/ and https://winpalm.rsapplication.com/guides/. It is maintained by the same maintainer as the related CmdPalm project: https://github.com/rahatsagor/CmdPalm and https://cmdpalm.app. WinPalm adapts that project's phone controls and engine for Windows, with provenance recorded in NOTICE.
+
+The form asks for evidence of usage or trust. The paragraph deliberately describes the available launch evidence; do not claim a large user base, independent reviews or download totals that have not been verified. Add real release statistics or published coverage if available. A new project's acceptance remains the Foundation's decision.
+
+The form also requires the maintainer to agree to the Foundation Code of Conduct, acknowledge that certificates are issued in the Foundation's name and may be revoked, and consent to processing their application/account data. Read and accept those yourself. The marketing-communications checkbox is optional.
 
 Reason for requesting signing:
 
