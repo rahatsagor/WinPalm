@@ -17,7 +17,7 @@ WinPalm is a Windows tray host around a Rust server/input engine and a Vue phone
 | `windows/WinPalm/` | Native .NET desktop host, services and disposable Windows checks |
 | `scripts/` | Reproducible source build and package assembly |
 | `packaging/` | Per-user installer and user-run test launcher |
-| `docs/` | Public protocol documentation |
+| `docs/` | Public protocol and release documentation |
 
 Use `scripts/build.ps1` for a complete Windows build. It creates a disposable web dependency workspace and stores .NET/Cargo output outside this checkout. CI overrides the development directory with the runner's temporary folder.
 
@@ -29,4 +29,4 @@ For phone work, copy `web/` into the private development workspace, run `bun ins
 
 Check x64 and ARM64 builds, native ABI integration, package contents, resource use and actual Windows interaction. Include the tested OS, architecture, keyboard layout, monitor scaling and hardware-dependent results. Avoid claiming phone/hardware behavior from unit tests or a cross-build.
 
-The installer source is optional and must be compiled with Inno Setup and tested separately. A public release also needs a trusted distribution channel, Authenticode signing/reputation decisions, source availability and dependency notices. Never embed signing material in the repository. Update the Rust, web and Windows project versions together.
+The universal installer is built with NSIS 3 from both native payloads using `bun scripts/build-installer.ts`. Test installation, upgrading and uninstalling on Windows separately. A public release also needs a trusted distribution channel, Authenticode signing/reputation decisions, source availability and dependency notices. Never embed signing material in the repository. Update the Rust, web and Windows project and manifest versions together. Run `bun scripts/release-notes.ts check VERSION` and the portable updater regressions with `dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path ../winpalm-dev/cache/update-tests`. See [RELEASING.md](docs/RELEASING.md) for the GitHub draft workflow and upgrade acceptance checks.

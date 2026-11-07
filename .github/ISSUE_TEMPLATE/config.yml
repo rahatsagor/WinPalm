@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: WinPalm website
+    url: https://winpalm.rsapplication.com
+    about: Downloads and product information.
+  - name: Looking for the Mac app?
+    url: https://github.com/rahatsagor/CmdPalm
+    about: CmdPalm is the macOS app. Report CmdPalm problems in its own repository.

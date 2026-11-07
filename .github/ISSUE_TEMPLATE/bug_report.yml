@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible WinPalm problem.
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Your devices
+      description: WinPalm version, Windows version/build, x64 or ARM64, phone/tablet and browser. For typing, include keyboard/speech language.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the exact error and the steps to reproduce it. Explain what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Diagnostic results
+      description: Relevant checks from Test-WinPalm.cmd or General → Check speech setup. Remove personal paths. Never include PINs, pairing tokens, private certificates, clipboard contents or private Deck commands.

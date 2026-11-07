@@ -103,7 +103,7 @@ The phone client uses Vue and Lucide. The Vue runtime entry bundles Vue runtime 
 | `@vue/reactivity` (Vue reactivity runtime) | `3.5.44` | `MIT` | https://github.com/vuejs/core/tree/main/packages/reactivity |
 | `@vue/runtime-core` (Vue runtime core) | `3.5.44` | `MIT` | https://github.com/vuejs/core/tree/main/packages/runtime-core |
 | `@vue/runtime-dom` (Vue DOM runtime) | `3.5.44` | `MIT` | https://github.com/vuejs/core/tree/main/packages/runtime-dom |
-| `@lucide/vue` (Lucide Vue components and bundled SVG icon paths) | `1.56.0` | `ISC` | https://github.com/lucide-icons/lucide/tree/main/packages/vue |
+| `@lucide/vue` (Lucide Vue components and bundled SVG icon paths) | `1.67.0` | `ISC` | https://github.com/lucide-icons/lucide/tree/main/packages/vue |
 
 Lucide Vue icon components referenced by the client include: `Aperture`, `AppWindow`, `ArrowDown`, `ArrowLeft`, `ArrowLeftToLine`, `ArrowRight`, `ArrowRightToLine`, `ArrowUp`, `AtSign`, `Ban`, `Battery`, `Bell`, `Bluetooth`, `Bookmark`, `Bot`, `Calendar`, `Camera`, `Check`, `ChevronDown`, `ChevronLeft`, `ChevronRight`, `ChevronUp`, `CircleAlert`, `CirclePlay`, `Clipboard`, `ClipboardPaste`, `Cloud`, `Code`, `Coffee`, `Copy`, `CornerDownLeft`, `Delete`, `Download`, `Eraser`, `EyeOff`, `FastForward`, `File`, `Film`, `Flame`, `Folder`, `Gamepad2`, `Globe`, `Grid2x2`, `Hand`, `Hash`, `Headphones`, `Heart`, `House`, `Image`, `Info`, `Keyboard`, `KeyboardOff`, `Laptop`, `LaptopMinimal`, `LayoutGrid`, `Lightbulb`, `LightbulbOff`, `Link`, `ListOrdered`, `LoaderCircle`, `Lock`, `LockOpen`, `LogOut`, `Mail`, `Maximize`, `MessageCircle`, `Mic`, `Minimize`, `Minus`, `Monitor`, `MonitorOff`, `MonitorSmartphone`, `Moon`, `Mouse`, `MousePointerClick`, `Music`, `OctagonX`, `Pause`, `Pencil`, `Phone`, `Play`, `Plus`, `Power`, `Redo`, `RefreshCw`, `Repeat`, `Rewind`, `Rocket`, `RotateCcw`, `RotateCw`, `Scan`, `ScanSearch`, `Scissors`, `Search`, `Send`, `Settings`, `ShieldAlert`, `ShieldCheck`, `SkipBack`, `SkipForward`, `SlidersHorizontal`, `Smartphone`, `Smile`, `Sparkles`, `Square`, `SquareArrowOutUpRight`, `SquarePlus`, `SquareTerminal`, `Star`, `Sun`, `SunDim`, `Tablet`, `Terminal`, `TextSelect`, `Timer`, `Touchpad`, `Trash2`, `TriangleAlert`, `Type`, `Undo`, `Unplug`, `Upload`, `Video`, `Volume1`, `Volume2`, `VolumeX`, `Wifi`, `Workflow`, `X`, `Zap`, `ZoomIn`, `ZoomOut`.
 
@@ -5610,7 +5610,7 @@ for the license to code that was sourced from the once_cell project.
 
 ### Cached text `b495047bd93a`
 
-Source files: `@lucide/vue` `1.56.0` — `LICENSE`.
+Source files: `@lucide/vue` `1.67.0` — `LICENSE`.
 
 ```text
 ISC License
@@ -7211,3 +7211,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 - The self-contained .NET runtime packages include the full cached `THIRD-PARTY-NOTICES.TXT` (78,041 bytes) from `Microsoft.NETCore.App.Runtime.win-x64 10.0.13`; the x64/arm64 .NET Core runtime and app-host notice files were byte-identical in the local cache. Windows Desktop runtime packages provide their MIT `LICENSE` file but no separate third-party notice file in the cache. The shared .NET runtime notice is included verbatim.
 - The .NET runtime MIT license files list `.NET Foundation and Contributors`; System.* package nuspecs separately list `© Microsoft Corporation. All rights reserved.` Both copyright sources are retained above.
 - Some Cargo license expressions are noncanonical strings as published in package metadata (for example `MIT/Apache-2.0`). They are reproduced as declared; the actual cached license files are included wherever present.
+
+## Windows installer
+
+The universal Windows setup executable includes the NSIS 3 installer runtime, Modern UI resources and System plug-in, using its LZMA compression module. The compiler version is recorded in the build log. NSIS and its plug-ins/resources use the zlib/libpng license unless otherwise noted; the LZMA module uses the Common Public License 1.0. See the complete upstream notices in `NSIS-LICENSE.txt` in an installed copy, or [packaging/NSIS-LICENSE.txt](packaging/NSIS-LICENSE.txt) in source. NSIS source and releases: https://nsis.sourceforge.io/ and https://sourceforge.net/projects/nsis/files/.
