@@ -75,7 +75,9 @@ Function .onInit
   ${EndIf}
   ; IsWow64Process2 returns the OS native machine, including under x86 emulation.
   System::Call 'kernel32::GetCurrentProcess() p.r0'
-  System::Call 'kernel32::IsWow64Process2(p r0, *i.r1, *i.r2) i.r3'
+  ; The API writes USHORT values into these DWORD-sized System plug-in slots.
+  ; Zero the whole slots so their upper bytes cannot affect the comparison.
+  System::Call 'kernel32::IsWow64Process2(p r0, *i0.r1, *i0.r2) i.r3'
   ${If} $3 == 0
     MessageBox MB_OK|MB_ICONSTOP "Windows could not identify this PC's processor. The installation has not started."
     Abort
