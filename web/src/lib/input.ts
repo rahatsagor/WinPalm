@@ -6,11 +6,13 @@ import { Key, MODIFIER_CODES } from './keys'
 import { Modifiers } from './modifiers'
 import type { MediaKey, MouseButton, TextMode } from './protocol'
 import { settings } from './settings'
+import { watch } from 'vue'
 
 export const modifiers = new Modifiers({
   keyDown: (code) => send({ t: 'key', code, down: true, repeat: false }),
   keyUp: (code) => send({ t: 'key', code, down: false }),
 })
+watch(() => settings.stickyModifiers, () => modifiers.reset(true))
 
 /** Keys currently held by a finger, so a lost touch can still be released. */
 const heldKeys = new Map<number, number>()

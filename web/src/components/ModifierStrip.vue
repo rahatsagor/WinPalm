@@ -5,6 +5,7 @@ import { keyDown, keyUp, tap } from '@/lib/input'
 import { Key, MOD_ORDER } from '@/lib/keys'
 import HapticSwitch from './HapticSwitch.vue'
 import ModKey from './ModKey.vue'
+import KeyGlyph from './KeyGlyph.vue'
 
 withDefaults(defineProps<{ extras?: boolean; vertical?: boolean }>(), { extras: true, vertical: false })
 
@@ -55,7 +56,7 @@ function onClick(code: number, event: MouseEvent) {
         @keydown.space.prevent="tap(key.code)"
         @contextmenu.prevent
       >
-        <span>{{ key.label }}</span>
+        <KeyGlyph :code="key.code" :fallback="key.label" />
         <HapticSwitch />
       </label>
     </template>

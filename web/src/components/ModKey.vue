@@ -3,7 +3,9 @@ import { computed } from 'vue'
 import { holdPointer, keyHaptic } from '@/lib/haptics'
 import { useHeldPointers } from '@/lib/heldPointers'
 import { modifiers } from '@/lib/input'
+import { settings } from '@/lib/settings'
 import HapticSwitch from './HapticSwitch.vue'
+import KeyGlyph from './KeyGlyph.vue'
 
 const props = defineProps<{ mod: number; code: number; symbol: string; label?: string; align?: 'left' | 'right' | 'center' }>()
 const status = computed(() => modifiers.status(props.mod))
@@ -13,7 +15,7 @@ const fingers = useHeldPointers((id) => modifiers.cancel(id))
 function down(event: PointerEvent) {
   holdPointer(event, true)
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
-  modifiers.press(event.pointerId, props.mod, props.code)
+  modifiers.press(event.pointerId, props.mod, props.code, settings.stickyModifiers ? 'sticky' : 'momentary')
   fingers.hold(event.pointerId)
   keyHaptic()
 }
@@ -27,9 +29,9 @@ function up(event: PointerEvent, cancelled: boolean) {
 /** Not a real pointer id, so it never meets a finger's. */
 const KEYBOARD_POINTER = -1
 
-/** From a keyboard or screen reader: a quick tap, which latches the modifier. */
+/** From a keyboard or screen reader: the same press and release as a touch. */
 function activate() {
-  modifiers.press(KEYBOARD_POINTER, props.mod, props.code)
+  modifiers.press(KEYBOARD_POINTER, props.mod, props.code, settings.stickyModifiers ? 'sticky' : 'momentary')
   modifiers.release(KEYBOARD_POINTER)
 }
 
@@ -64,7 +66,7 @@ function onClick(event: MouseEvent) {
     @keydown.space.prevent="activate"
     @contextmenu.prevent
   >
-    <span class="text-[15px] leading-none">{{ symbol }}</span>
+    <KeyGlyph :code="code" :fallback="symbol" class="text-[15px] leading-none" />
     <span v-if="label && align" class="text-[10px] leading-none">{{ label }}</span>
     <span v-if="status === 'locked'" class="absolute top-1 right-1 size-1.5 rounded-full bg-accent-text/80" />
     <HapticSwitch />

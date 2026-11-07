@@ -80,7 +80,7 @@ function press(key: CustomKey, pointerId: number) {
       keyDown(pointerId, action.code, action.mods)
       return () => keyUp(pointerId)
     case 'mod':
-      modifiers.press(pointerId, action.mod)
+      modifiers.press(pointerId, action.mod, undefined, 'momentary')
       return (cancelled: boolean) => (cancelled ? modifiers.cancel(pointerId) : modifiers.release(pointerId))
     case 'media': {
       modifiers.consume()

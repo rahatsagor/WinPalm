@@ -35,6 +35,20 @@ const readerClick = (el: Element) => el.dispatchEvent(new MouseEvent('click', { 
 const enter = (el: Element) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
 
 describe('controls used without touch', () => {
+  it('reorders local tabs with Alt + Left without sending a lone Alt to Windows', async () => {
+    const socket = connect()
+    const { installHardwareKeyboard } = await import('../src/lib/hardware')
+    const { default: GroupTabs } = await import('../src/components/GroupTabs.vue')
+    installHardwareKeyboard()
+    const view = mount(GroupTabs, { props: { items: [{ id: 'a', name: 'One' }, { id: 'b', name: 'Two' }], active: 'a', editing: true, label: 'Groups' }, attachTo: document.body })
+    const tab = view.find('[data-group-id="b"]').element
+    tab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt', code: 'AltLeft', altKey: true, bubbles: true, cancelable: true }))
+    tab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', code: 'ArrowLeft', altKey: true, bubbles: true, cancelable: true }))
+    tab.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft', code: 'ArrowLeft', altKey: true, bubbles: true, cancelable: true }))
+    tab.dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt', code: 'AltLeft', bubbles: true, cancelable: true }))
+    expect(view.emitted('reorder')).toEqual([[['b', 'a']]])
+    expect(socket.sent.filter((message) => message.t === 'key')).toEqual([])
+  })
   it('click the PC from the click bar', async () => {
     const socket = connect()
     const { default: ClickBar } = await import('../src/components/ClickBar.vue')
@@ -55,6 +69,9 @@ describe('controls used without touch', () => {
     const { modifiers } = await import('../src/lib/input')
     const { Key } = await import('../src/lib/keys')
     const { Mod } = await import('../src/lib/protocol')
+    const { settings } = await import('../src/lib/settings')
+    settings.stickyModifiers = true
+    await import('vue').then(({ nextTick }) => nextTick())
     const view = mount(ModKey, { props: { mod: Mod.Command, code: Key.Command, symbol: '⌘', label: 'Command' }, attachTo: document.body })
     view.find('[role="button"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
     expect(modifiers.status(Mod.Command)).toBe('latched')

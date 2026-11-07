@@ -41,6 +41,7 @@ interface Touch {
   at: number
   committed: boolean
   used: boolean
+  momentary: boolean
 }
 
 export class Modifiers {
@@ -73,8 +74,17 @@ export class Modifiers {
   }
 
   /** A finger landed on a modifier key. `code` distinguishes left/right keys. */
-  press(pointer: number, mod: number, code = CODE_FOR[mod]!) {
-    this.touches.set(pointer, { mod, code, at: this.now(), committed: false, used: false })
+  press(pointer: number, mod: number, code = CODE_FOR[mod]!, behavior: 'sticky' | 'momentary' = 'sticky') {
+    if (this.touches.has(pointer)) return
+    // Full and custom keyboards behave like hardware. The shortcut strip
+    // keeps its one-finger latches; Fn is always a client-side layer switch.
+    const momentary = behavior === 'momentary' && mod !== Mod.Fn
+    if (momentary) {
+      this.state.latched &= ~mod
+      this.lastTap.delete(mod)
+    }
+    if (momentary && !this.isPressed(code)) this.io.keyDown(code)
+    this.touches.set(pointer, { mod, code, at: this.now(), committed: momentary, used: false, momentary })
     this.state.touching |= mod
   }
 
@@ -85,7 +95,7 @@ export class Modifiers {
     this.state.touching = [...this.touches.values()].reduce((acc, t) => acc | t.mod, 0)
     // Two fingers on ⇧ hold one key on the PC; the last to lift releases it.
     if (touch.committed && !this.isPressed(touch.code)) this.io.keyUp(touch.code)
-    if (touch.used || this.now() - touch.at > TAP_MAX_MS) return
+    if (touch.momentary || touch.used || this.now() - touch.at > TAP_MAX_MS) return
     this.tap(touch.mod)
   }
 
@@ -120,15 +130,15 @@ export class Modifiers {
       // without another key would open the emoji picker.
       if (mod !== Mod.Fn) {
         const code = CODE_FOR[mod]!
+        if (!this.isPressed(code)) this.io.keyDown(code)
         this.lockHeld.set(mod, code)
-        this.io.keyDown(code)
       }
     } else {
       this.state.locked &= ~mod
       const code = this.lockHeld.get(mod)
       if (code !== undefined) {
         this.lockHeld.delete(mod)
-        this.io.keyUp(code)
+        if (!this.isPressed(code)) this.io.keyUp(code)
       }
     }
   }
@@ -209,6 +219,7 @@ export class Modifiers {
   }
 
   private isPressed(code: number): boolean {
+    if ([...this.lockHeld.values()].includes(code)) return true
     for (const touch of this.touches.values()) if (touch.committed && touch.code === code) return true
     return false
   }

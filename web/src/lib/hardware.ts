@@ -24,7 +24,10 @@ function codeFor(event: KeyboardEvent): number | undefined {
 function onKeyDown(event: KeyboardEvent) {
   // Sheets keep the keyboard for their own fields and Escape-to-close, and a
   // focused button that took Return or Space has used it.
-  if (editable(event.target) || event.isComposing || event.defaultPrevented || document.querySelector('[role="dialog"]')) return
+  const localControl = event.target instanceof Element && event.target.closest('button, a[href], [role="button"], [role="tab"], [role="radio"], [role="switch"], [role="slider"]')
+  // Alt + Arrow reorders the phone's tabs. Forwarding its Alt press first
+  // would leave a standalone Alt tap on Windows and activate the PC's menu.
+  if (editable(event.target) || localControl || event.isComposing || event.defaultPrevented || document.querySelector('[role="dialog"]')) return
   const code = codeFor(event)
   if (code === undefined) return
   event.preventDefault()

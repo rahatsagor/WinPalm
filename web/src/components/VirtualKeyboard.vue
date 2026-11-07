@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { Globe } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { labels, runAction, state } from '@/lib/connection'
 import { MEDIA, SYSTEM } from '@/lib/actions'
@@ -11,6 +10,7 @@ import { settings } from '@/lib/settings'
 import { symbol } from '@/lib/symbols'
 import { useTouchKeys } from '@/lib/touchKeys'
 import HapticSwitch from './HapticSwitch.vue'
+import KeyGlyph from './KeyGlyph.vue'
 
 const props = withDefaults(defineProps<{ functionRow?: boolean }>(), { functionRow: true })
 
@@ -44,7 +44,6 @@ const ARROWS: ArrowSpec[] = [
   { kind: 'arrow', code: Key.Down, glyph: '▼', name: 'down' },
   { kind: 'arrow', code: Key.Right, glyph: '▶', name: 'right' },
 ]
-const arrow = (code: number) => ARROWS.find((a) => a.code === code)!
 
 const UNITS = 15
 const metrics = computed(() => {
@@ -99,7 +98,7 @@ const touch = useTouchKeys(root, {
     if (!spec) return
     keyHaptic()
     if (spec.kind === 'mod') {
-      modifiers.press(pointerId, spec.mod, spec.code)
+      modifiers.press(pointerId, spec.mod, spec.code, settings.stickyModifiers ? 'sticky' : 'momentary')
       held.set(pointerId, { code: spec.code, mod: true })
     } else if (spec.kind === 'fn') {
       pressFn(spec, pointerId)
@@ -196,26 +195,20 @@ const rowStyle = (r: number) => ({ flex: r === 0 ? '0.72 1 0%' : '1 1 0%' })
             :data-key="spec.code"
             role="button"
             class="key"
-            :class="[modClass(spec), !metrics.compact && spec.align ? `wide align-${spec.align}` : '']"
+            :class="[modClass(spec), !metrics.compact && spec.align && !['Ctrl', 'Alt'].includes(spec.symbol) ? `wide align-${spec.align}` : '']"
             :style="flex(spec.width)"
             :aria-label="spec.label"
             :aria-pressed="modifiers.status(spec.mod) !== 'off'"
           >
             <template v-if="spec.mod === Mod.Fn">
-              <template v-if="metrics.compact">
-                <span class="word">fn</span>
-              </template>
-              <template v-else>
-                <span class="word self-end">fn</span>
-                <Globe class="self-start" :size="14" :stroke-width="1.6" />
-              </template>
+              <span class="word">fn</span>
             </template>
             <template v-else-if="metrics.compact || !spec.align">
-              <span class="sym">{{ spec.symbol }}</span>
+              <KeyGlyph :code="spec.code" :fallback="spec.symbol" class="sym" />
             </template>
             <template v-else>
-              <span class="sym-small">{{ spec.symbol }}</span>
-              <span class="word">{{ WORDS[spec.code] }}</span>
+              <KeyGlyph :code="spec.code" :fallback="spec.symbol" class="sym-small" />
+              <span v-if="!['Ctrl', 'Alt'].includes(spec.symbol)" class="word">{{ WORDS[spec.code] }}</span>
             </template>
             <span v-if="modifiers.status(spec.mod) === 'locked'" class="lock-dot" />
           </div>
@@ -237,11 +230,11 @@ const rowStyle = (r: number) => ({ flex: r === 0 ? '0.72 1 0%' : '1 1 0%' })
             <span v-if="spec.code === Key.CapsLock && state.capsLock" class="caps-light" />
             <template v-if="spec.code === Key.Space" />
             <template v-else-if="metrics.compact || !spec.align">
-              <span v-if="spec.symbol" class="sym">{{ spec.symbol }}</span>
+              <KeyGlyph v-if="spec.symbol" :code="spec.code" :fallback="spec.symbol" class="sym" />
               <span v-else class="word">{{ spec.label }}</span>
             </template>
             <template v-else>
-              <span v-if="spec.symbol" class="sym-small">{{ spec.symbol }}</span>
+              <KeyGlyph v-if="spec.symbol" :code="spec.code" :fallback="spec.symbol" class="sym-small" />
               <span v-else />
               <span class="word">{{ WORDS[spec.code] ?? spec.label }}</span>
             </template>
@@ -263,18 +256,18 @@ const rowStyle = (r: number) => ({ flex: r === 0 ? '0.72 1 0%' : '1 1 0%' })
           <!-- Arrows, laid out like a laptop: tall ◀ ▶, half-height ▲ ▼ -->
           <div v-else-if="spec.kind === 'arrows'" class="arrows flex min-w-0" :style="flex(3)">
             <div :data-key="Key.Left" role="button" class="key arrow" :class="down.has(Key.Left) && 'is-down'" aria-label="left">
-              {{ arrow(Key.Left).glyph }}
+              <KeyGlyph :code="Key.Left" />
             </div>
             <div class="flex min-w-0 flex-1 flex-col">
               <div :data-key="Key.Up" role="button" class="key arrow" :class="down.has(Key.Up) && 'is-down'" aria-label="up">
-                {{ arrow(Key.Up).glyph }}
+                <KeyGlyph :code="Key.Up" />
               </div>
               <div :data-key="Key.Down" role="button" class="key arrow" :class="down.has(Key.Down) && 'is-down'" aria-label="down">
-                {{ arrow(Key.Down).glyph }}
+                <KeyGlyph :code="Key.Down" />
               </div>
             </div>
             <div :data-key="Key.Right" role="button" class="key arrow" :class="down.has(Key.Right) && 'is-down'" aria-label="right">
-              {{ arrow(Key.Right).glyph }}
+              <KeyGlyph :code="Key.Right" />
             </div>
           </div>
         </template>
@@ -353,7 +346,7 @@ const rowStyle = (r: number) => ({ flex: r === 0 ? '0.72 1 0%' : '1 1 0%' })
 }
 
 /* Wide modifier and special keys: symbol in the top corner, word below, on
-   the side facing away from the letters, as printed on Apple keyboards. */
+   the side facing away from the letters, as printed on laptop keyboards. */
 .key.wide {
   justify-content: space-between;
   padding: calc(var(--radius) * 0.9) calc(var(--radius) + 2px);

@@ -161,3 +161,63 @@ describe('modifier keys', () => {
     mods.reset(true)
     expect(events).toEqual([`down:${Key.RightOption}`, `up:${Key.RightOption}`])
   })})
+
+describe('Windows momentary modifiers', () => {
+  it.each([
+    [Mod.Command, Key.Command], [Mod.Control, Key.Control],
+    [Mod.Option, Key.Option], [Mod.Shift, Key.Shift],
+    [Mod.RightCommand, Key.RightCommand], [Mod.RightControl, Key.RightControl],
+    [Mod.RightOption, Key.RightOption], [Mod.RightShift, Key.RightShift],
+  ])('presses and releases standalone modifier %s without a latch', (mod, code) => {
+    const { mods, events, advance } = setup()
+    mods.press(1, mod, code, 'momentary')
+    expect(events).toEqual([`down:${code}`])
+    advance(80)
+    mods.release(1)
+    expect(events).toEqual([`down:${code}`, `up:${code}`])
+    expect(mods.status(mod)).toBe('off')
+    expect(mods.use()).toBe(0)
+  })
+
+  it('does not lock after repeated taps and holds a combo only while touched', () => {
+    const { mods, events, advance } = setup()
+    for (let i = 0; i < 2; i++) {
+      mods.press(1, Mod.Control, Key.Control, 'momentary')
+      advance(60); mods.release(1); advance(100)
+    }
+    expect(mods.status(Mod.Control)).toBe('off')
+    mods.press(2, Mod.Control, Key.Control, 'momentary')
+    expect(mods.use()).toBe(0)
+    mods.release(2)
+    expect(events).toEqual(Array.from({ length: 3 }, () => [`down:${Key.Control}`, `up:${Key.Control}`]).flat())
+  })
+
+  it('releases cancelled presses and handles two fingers on one key', () => {
+    const { mods, events } = setup()
+    mods.press(1, Mod.Shift, Key.Shift, 'momentary')
+    mods.press(2, Mod.Shift, Key.Shift, 'momentary')
+    mods.cancel(1)
+    expect(events).toEqual([`down:${Key.Shift}`])
+    mods.cancel(2)
+    expect(events).toEqual([`down:${Key.Shift}`, `up:${Key.Shift}`])
+    expect(mods.active).toBe(0)
+  })
+
+  it('keeps Fn as a client-side media layer without sending a Windows key', () => {
+    const { mods, events } = setup()
+    mods.press(1, Mod.Fn, Key.Fn, 'momentary')
+    mods.release(1)
+    expect(mods.active & Mod.Fn).toBe(Mod.Fn)
+    expect(events).toEqual([])
+  })
+
+  it('does not release a momentary key when its shortcut-strip lock is removed', () => {
+    const { mods, events } = setup()
+    mods.toggleLock(Mod.Control)
+    mods.press(1, Mod.Control, Key.Control, 'momentary')
+    mods.toggleLock(Mod.Control)
+    expect(events).toEqual([`down:${Key.Control}`])
+    mods.release(1)
+    expect(events).toEqual([`down:${Key.Control}`, `up:${Key.Control}`])
+  })
+})

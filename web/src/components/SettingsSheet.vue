@@ -241,6 +241,7 @@ const times = (v: number) => `${v.toFixed(1)}×`
       />
       <p class="pb-2 text-[13px] leading-snug text-muted">Display brightness controls depend on PC hardware support.</p>
       <Toggle v-model="settings.keyRepeat" label="Key repeat" hint="Holding a key repeats it, using the PC’s repeat speed." />
+      <Toggle v-model="settings.stickyModifiers" label="Sticky shortcut modifiers" hint="On the PC keyboard and shortcut strip, tap a modifier for the next key or double-tap to lock it. Off by default: modifiers press and release like a real keyboard. Custom keyboard modifiers always follow your finger." />
       <Toggle v-model="settings.liveTyping" label="Live typing" hint="Text appears on the PC as you type, including autocorrect." />
       <Segmented
         v-if="settings.showAdvanced"

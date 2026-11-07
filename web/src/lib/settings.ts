@@ -36,6 +36,8 @@ export interface Settings {
   /** Which way the phone is turned to read it. */
   sidewaysTurn: 'left' | 'right'
   keyRepeat: boolean
+  /** Opt in to one-finger shortcut latches; normal keys press and release. */
+  stickyModifiers: boolean
   textMode: TextMode
   liveTyping: boolean
   /** Deck button size on this device, relative to a phone held upright. */
@@ -104,6 +106,7 @@ export function defaultSettings(): Settings {
     sidewaysKeyboard: false,
     sidewaysTurn: 'left',
     keyRepeat: true,
+    stickyModifiers: false,
     textMode: 'unicode',
     liveTyping: true,
     deckButtonSize: 1,

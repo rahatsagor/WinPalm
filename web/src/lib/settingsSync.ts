@@ -38,7 +38,7 @@ export const COPY_CATEGORIES = [
   },
   {
     id: 'keyboard', label: 'Keyboard settings', hint: 'Keyboard mode, typing and key repeat',
-    keys: ['keyboard', 'functionRow', 'sidewaysKeyboard', 'sidewaysTurn', 'keyRepeat', 'textMode', 'liveTyping'],
+    keys: ['keyboard', 'functionRow', 'sidewaysKeyboard', 'sidewaysTurn', 'keyRepeat', 'stickyModifiers', 'textMode', 'liveTyping'],
   },
   { id: 'deck', label: 'Deck button size', hint: 'Button size on this device', keys: ['deckButtonSize'] },
   {
