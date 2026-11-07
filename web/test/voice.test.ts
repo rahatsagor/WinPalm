@@ -85,4 +85,14 @@ describe('voice typing', () => {
     expect(voiceLib.voice.active).toBe(false)
     expect(voiceLib.voice.error).toBe('The Mac is still busy.')
   })
+
+  it('keeps the specific Windows startup cause when a generic unavailable reply follows', async () => {
+    const socket = connected()
+    const start = voiceLib.startVoice(() => {})
+    microphone.shift()!(fakeStream()); await start
+    socket.receive({ t: 'voice', state: 'error', message: 'Windows could not open the phone audio stream. Error 0x80131515.', final: false })
+    socket.receive({ t: 'voice', state: 'unavailable', message: "Couldn't start speech recognition on the PC.", final: false })
+    expect(voiceLib.voice.active).toBe(false)
+    expect(voiceLib.voice.error).toBe('Windows could not open the phone audio stream. Error 0x80131515.')
+  })
 })
