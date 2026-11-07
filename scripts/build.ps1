@@ -40,6 +40,8 @@ Push-Location $Root
 try {
     Run { rustup target add $Target }
     if (!$SkipChecks) {
+        Run { bun scripts/release-notes.ts check ((Get-Content (Join-Path $Root 'web/package.json') -Raw | ConvertFrom-Json).version) }
+        Run { dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path (Join-Path $Cache 'dotnet-update-tests') }
         Run { cargo fmt --all --check }
         Run { cargo clippy --locked --all-targets -- -D warnings }
         Run { cargo test --locked --all-targets }
@@ -78,12 +80,15 @@ try {
         if (Test-Path $Archive) { Remove-Item $Archive -Force }
         [IO.Compression.ZipFile]::CreateFromDirectory($Output, $Archive, [IO.Compression.CompressionLevel]::Optimal, $false)
         (Get-FileHash $Archive -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($Archive) | Set-Content ($Archive + '.sha256')
+        Run { dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path (Join-Path $Cache 'dotnet-update-tests') -- --package $Archive $Architecture $Version }
         Write-Output $Archive
     }
     if ($Installer) {
-        $Compiler = if (Get-Command ISCC.exe -ErrorAction SilentlyContinue) { (Get-Command ISCC.exe).Source } else { "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-        if (!(Test-Path $Compiler)) { throw 'Install Inno Setup 6 to build the optional per-user installer.' }
-        Run { & $Compiler "/DSourceDir=$Output" "/DArchitecture=$Architecture" "/DOutputDir=$(Join-Path $Dev 'artifacts')" packaging/WinPalm.iss }
+        $Payloads = Join-Path $Dev 'artifacts/builds'
+        foreach ($Arch in @('x64','arm64')) {
+            if (!(Test-Path (Join-Path $Payloads "$Arch/WinPalm.exe"))) { throw 'Build both x64 and ARM64 packages before using -Installer. Install NSIS 3 or set MAKENSIS to its compiler.' }
+        }
+        Run { bun scripts/build-installer.ts --payloads $Payloads --output (Join-Path $Dev "artifacts/WinPalm-$Version-Setup.exe") }
     }
 } finally { Pop-Location }
 Write-Output "Windows package: $Output"
