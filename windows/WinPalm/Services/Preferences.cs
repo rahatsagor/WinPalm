@@ -16,6 +16,9 @@ internal sealed class Preferences
   public bool AllowLocalProxy { get; set; }
   public bool Dictation { get; set; } = true;
   public bool TrayHintShown { get; set; }
+  public bool CheckForUpdates { get; set; } = true;
+  public DateTime LastUpdateCheckUtc { get; set; }
+  public string NotifiedUpdateVersion { get; set; } = "";
   public List<string> AppFolders { get; set; } = [];
   // Populate keeps the case-insensitive dictionary when loading.
   [System.Text.Json.Serialization.JsonObjectCreationHandling(System.Text.Json.Serialization.JsonObjectCreationHandling.Populate)]
@@ -81,5 +84,18 @@ internal sealed class Preferences
       if (key?.GetValue("WinPalm") is string command && command != LoginCommand && LocationProblem(Environment.ProcessPath) is null) key.SetValue("WinPalm", LoginCommand);
     }
     catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException) { Diagnostics.Record(error); }
+  }
+  /// Portable updates also work for the per-user install. Keep the
+  /// version Windows displays in Installed apps in sync with that copy.
+  internal static void KeepInstalledVersionCurrent()
+  {
+    try
+    {
+      using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\WinPalm", true);
+      if (key?.GetValue("InstallLocation") is not string directory) return;
+      if (string.Equals(Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+        key.SetValue("DisplayVersion", UpdateController.CurrentVersion.ToString(3));
+    }
+    catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException or ArgumentException) { Diagnostics.Record(error); }
   }
 }

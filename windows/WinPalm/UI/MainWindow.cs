@@ -6,6 +6,7 @@ namespace WinPalm.UI;
 internal sealed class MainWindow : Form
 {
   private readonly HostContext host;
+  private readonly uint installerQuitMessage = Win32.RegisterWindowMessageW("RSApplication.WinPalm.QuitForInstall");
   private readonly Panel page = new() { Dock = DockStyle.Fill, AutoScroll = true };
   private Panel? sidebar;
   private Label status = new();
@@ -14,6 +15,10 @@ internal sealed class MainWindow : Form
   private PictureBox? qr;
   private Label? pin, address, expires, summary;
   private CheckBox? encrypted;
+  private Label? updateStatus;
+  private Button? updateCheck, updateInstall, updateCancel;
+  private ProgressBar? updateProgress;
+  private TextBox? updateNotes;
   private bool quitting;
   private string lastLink = "";
   internal MainWindow(HostContext host)
@@ -40,7 +45,7 @@ internal sealed class MainWindow : Form
     navigation.Controls.Add(Theme.Label("WinPalm", 23, bold: true)); navigation.Controls.Add(Theme.Label("Your PC, in your palm.", 9, Theme.Muted));
     var text = previous is null ? "Starting…" : status.Text; var color = previous is null ? Theme.Muted : status.ForeColor;
     status = Theme.Label(text, 10, color); status.MaximumSize = Theme.Px(160, 0); navigation.Controls.Add(status);
-    foreach (var name in new[] { "Connect", "General", "Devices", "Deck", "Automations", "Phone setup", "Advanced", "About" })
+    foreach (var name in new[] { "Connect", "General", "Devices", "Deck", "Automations", "Phone setup", "Advanced", "Updates", "About" })
     {
       var button = Theme.Button(name, () => Navigate(name)); button.AutoSize = false; button.Size = Theme.Px(160, 38); button.TextAlign = ContentAlignment.MiddleLeft; button.FlatAppearance.BorderSize = 0;
       navigation.Controls.Add(button);
@@ -60,6 +65,7 @@ internal sealed class MainWindow : Form
   internal void NetworkChanged() { if (section == "Connect" && !IsDisposed) Navigate(section); }
   protected override void WndProc(ref Message message)
   {
+    if (installerQuitMessage != 0 && message.Msg == installerQuitMessage) { host.Quit(); return; }
     if (message.Msg == 0x312 && message.WParam == 1) host.TogglePause();
     base.WndProc(ref message);
   }
@@ -82,6 +88,7 @@ internal sealed class MainWindow : Form
         case "Automations": Automations(); break;
         case "Phone setup": PhoneSetup(); break;
         case "Advanced": Advanced(); break;
+        case "Updates": Updates(); break;
         case "About": About(); break;
       }
       UpdateState(host.Snapshot);
@@ -145,8 +152,16 @@ internal sealed class MainWindow : Form
       if (Preferences.StartsAtLogin != value) BeginInvoke(() => Navigate(section));
     }));
     Add(Theme.Toggle("Enable local voice typing", host.Preferences.Dictation, value => Action(() => { host.Preferences.Dictation = value; Save(); })));
+    Add(Theme.Toggle("Check GitHub for updates automatically", host.Preferences.CheckForUpdates, value => Action(() => { host.Preferences.CheckForUpdates = value; Save(); if (value) host.Updates.CheckWhenDue(); })));
     Hint(SpeechService.Available ? "An offline Windows speech recognizer is installed. Voice typing uses the PC, with no transcription service." : "No offline speech recognizer is installed. Add a speech language in Windows Settings → Time & language → Speech.");
+    Hint(SpeechService.InstalledLanguages);
+    if (SpeechService.LastStartupProblem is { } speechProblem) Hint(speechProblem);
     Add(Theme.Button("Windows speech settings", () => DesktopServices.Open("ms-settings:speech")));
+    Add(Theme.Button("Check speech setup", async () =>
+    {
+      var result = await Task.Run(SpeechService.CheckSetup);
+      if (!IsDisposed) MessageBox.Show(this, result, "WinPalm speech setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }));
     Add(Theme.Label("Extra app folders", 13, bold: true));
     Hint("Include portable apps or apps on an external drive. Start Menu and Microsoft Store apps are discovered automatically.");
     foreach (var path in host.Preferences.AppFolders.ToArray()) Add(Theme.Row(Theme.Label(path, 9), Theme.Button("Remove", () => Action(() => { host.Preferences.AppFolders.Remove(path); Save(); host.Services.Apps.Invalidate(); Navigate(section); }))));
@@ -241,7 +256,41 @@ internal sealed class MainWindow : Form
     Hint("Built by RS Application. Based on CmdPalm, licensed under AGPL-3.0-only. No analytics, account, or cloud service. Voice recognition uses installed Windows speech languages.");
     Hint("This port is in preview. See the included README for tested status, hardware requirements, and Windows validation steps.");
     Add(Theme.Button("Open license", () => DesktopServices.Open(Path.Combine(AppContext.BaseDirectory, "LICENSE"))));
-    Hint("Updates are installed manually from a trusted package. WinPalm does not download or execute updates in the background.");
+    Add(Theme.Button("Check for updates…", async () => { ShowUpdates(); await host.Updates.CheckAsync(); }));
+  }
+  internal void ShowUpdates() => Navigate("Updates");
+  private void Updates()
+  {
+    Hint($"Installed: WinPalm {UpdateController.CurrentVersion.ToString(3)} · {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
+    Add(Theme.Toggle("Check GitHub for updates automatically", host.Preferences.CheckForUpdates, value => Action(() => { host.Preferences.CheckForUpdates = value; Save(); if (value) host.Updates.CheckWhenDue(); })));
+    Hint("Checks once a day and lets you know in the notification area. Downloads start when you choose Download and restart.");
+    updateStatus = Theme.Label("", 11); Add(updateStatus);
+    updateProgress = new ProgressBar { Minimum = 0, Maximum = 100, Size = Theme.Px(510, 12), Margin = Theme.Px(0, 8, 0, 12) }; Add(updateProgress);
+    updateCheck = Theme.Button("Check now", async () => await host.Updates.CheckAsync());
+    updateInstall = Theme.Button("Download and restart", async () => await host.Updates.InstallAsync(), true);
+    updateCancel = Theme.Button("Cancel download", host.Updates.Cancel);
+    Add(Theme.Row(updateCheck, updateInstall, updateCancel));
+    Add(Theme.Button("Open GitHub releases", () => Action(() => DesktopServices.Open(host.Updates.Available?.Page.AbsoluteUri ?? ReleaseUpdates.ReleasesUrl))));
+    Hint("The package is verified before replacing this copy. WinPalm briefly disconnects phones during restart. Your paired devices, settings and Deck are kept.");
+    Add(Theme.Label("Release notes", 13, bold: true));
+    updateNotes = Theme.Input("", true); updateNotes.ReadOnly = true; updateNotes.Size = Theme.Px(510, 200); updateNotes.ScrollBars = ScrollBars.Vertical; Add(updateNotes);
+    UpdateUpdates();
+  }
+  internal void UpdateUpdates()
+  {
+    if (section != "Updates" || IsDisposed || updateStatus is null) return;
+    var updates = host.Updates;
+    updateStatus.Text = updates.Message;
+    updateCheck!.Enabled = !updates.Busy;
+    updateInstall!.Visible = updates.Available is { Package: not null, Checksum: not null };
+    updateInstall.Enabled = !updates.Busy;
+    updateCancel!.Visible = updates.Installing;
+    updateProgress!.Visible = updates.Installing;
+    updateProgress.Value = Math.Clamp(updates.Progress, 0, 100);
+    var notes = updates.Available is { } release
+        ? (release.Package is null || release.Checksum is null ? "This release does not include an in-app update for this processor. Open GitHub releases for its downloads.\r\n\r\n" : "") + release.Notes.Replace("\n", "\r\n")
+        : "Release notes will appear here when an update is available.";
+    if (updateNotes!.Text != notes) updateNotes.Text = notes;
   }
   private bool Confirm(string text) => MessageBox.Show(this, text, "WinPalm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
   private string? Prompt(string title, string initial, bool multiline = false)

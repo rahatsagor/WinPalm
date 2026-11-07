@@ -8,6 +8,7 @@ internal sealed class HostContext : ApplicationContext
 {
   internal Preferences Preferences { get; }
   internal DesktopServices Services { get; }
+  internal UpdateController Updates { get; }
   internal JsonElement Snapshot { get; private set; }
   /// Set on the UI thread from background checks; shown on Connect.
   internal NetworkCheck.Problem? NetworkProblem { get; private set; }
@@ -18,12 +19,13 @@ internal sealed class HostContext : ApplicationContext
   /// Lock and sleep arrive on the SystemEvents thread, unlock on the UI thread.
   private readonly object lockGate = new();
   private readonly ToolStripMenuItem pauseItem;
+  private readonly ToolStripMenuItem updateItem;
   private bool busy, quitting, locked, wasPaused;
   private nint lastLayout, lastForeground;
   private int ticks, checkingNetwork;
   internal HostContext(Preferences preferences, bool minimized)
   {
-    Preferences = preferences; Services = new(preferences); CoreBridge.Desktop = Services;
+    Preferences = preferences; Services = new(preferences); Updates = new(preferences); CoreBridge.Desktop = Services;
     CoreBridge.Call(new { op = "create", config = Services.Config() });
     window = new MainWindow(this); _ = window.Handle;
     CoreBridge.Event = value => { if (!quitting && !window.IsDisposed) window.BeginInvoke(() => OnEvent(value)); };
@@ -31,9 +33,14 @@ internal sealed class HostContext : ApplicationContext
     menu.Items.Add("Open WinPalm", null, (_, _) => ShowWindow());
     pauseItem = new("Pause control", null, (_, _) => TogglePause()); menu.Items.Add(pauseItem);
     menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Restart server", null, (_, _) => Restart());
+    updateItem = new("Check for updates…", null, async (_, _) => { ShowWindow(); window.ShowUpdates(); await Updates.CheckAsync(); }); menu.Items.Add(updateItem);
     menu.Items.Add("Quit WinPalm", null, (_, _) => ExitThread());
     tray = new NotifyIcon { Text = "WinPalm · Starting", Icon = window.Icon, ContextMenuStrip = menu, Visible = true };
     tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
+    tray.BalloonTipClicked += (_, _) => { if (Updates.Available is not null) { ShowWindow(); window.ShowUpdates(); } };
+    Updates.Changed += () => { if (!quitting) { updateItem.Text = Updates.Available is { } release ? $"WinPalm {release.Version.ToString(3)} available…" : "Check for updates…"; window.UpdateUpdates(); } };
+    Updates.UpdateFound += () => { if (!quitting) tray.ShowBalloonTip(10000, "WinPalm update available", $"WinPalm {Updates.Available!.Version.ToString(3)} is ready. Open Updates to download and restart.", ToolTipIcon.Info); };
+    Updates.RestartRequested += Quit;
     if (!Win32.RegisterHotKey(window.Handle, 1, 0x4003, 0x13)) tray.ShowBalloonTip(5000, "WinPalm", "Ctrl + Alt + Pause is already used by another app. Pause is available in the tray menu.", ToolTipIcon.Info);
     SystemEvents.SessionSwitch += SessionChanged; SystemEvents.PowerModeChanged += PowerChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
@@ -41,6 +48,7 @@ internal sealed class HostContext : ApplicationContext
     timer = new System.Windows.Forms.Timer { Interval = 2000 }; timer.Tick += async (_, _) => await Poll(); timer.Start();
     if (!minimized) ShowWindow();
     _ = Poll();
+    Updates.CheckWhenDue();
   }
   internal void Quit() => ExitThread();
   /// Closing the window keeps WinPalm running; say so once, since Windows 11
@@ -121,7 +129,7 @@ internal sealed class HostContext : ApplicationContext
         if (++ticks % 15 == 0) { KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "appsChanged" }); CoreBridge.Call(new { op = "permissionChanged" }); }
         return current;
       });
-      if (!quitting) { Snapshot = snapshot; window.UpdateState(snapshot); UpdateTray(); if (ticks % 15 == 0) CheckNetwork(); }
+      if (!quitting) { Snapshot = snapshot; window.UpdateState(snapshot); UpdateTray(); if (ticks % 15 == 0) { CheckNetwork(); Updates.CheckWhenDue(); } }
     }
     catch (Exception error) { Diagnostics.Record(error); }
     finally { busy = false; }
@@ -176,6 +184,7 @@ internal sealed class HostContext : ApplicationContext
   protected override void ExitThreadCore()
   {
     if (quitting) return; quitting = true; timer.Stop(); timer.Dispose();
+    Updates.Dispose();
     SystemEvents.SessionSwitch -= SessionChanged; SystemEvents.PowerModeChanged -= PowerChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged -= NetworkAddressChanged;
     CoreBridge.Event = null; CoreBridge.TryCall(new { op = "pause", paused = true }); CoreBridge.TryCall(new { op = "stop" });

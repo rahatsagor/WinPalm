@@ -4,6 +4,7 @@ namespace WinPalm.Services;
 
 internal static class Win32
 {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern uint RegisterWindowMessageW(string name);
   internal delegate bool EnumWindowsProc(nint window, nint data);
   [DllImport("user32.dll")] internal static extern bool EnumWindows(EnumWindowsProc callback, nint data);
   [DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint window);
