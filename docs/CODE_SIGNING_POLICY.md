@@ -4,7 +4,7 @@ WinPalm is maintained by **RS Application** at [rahatsagor/WinPalm](https://gith
 
 ## Current status
 
-WinPalm is preparing an application for SignPath Foundation's free open-source signing program. Approval and a successful production signing run are still required. **The published 0.1.0 release is unsigned.** Existing release files and tags will not be replaced; signing will start with a new release after onboarding.
+WinPalm's application for SignPath Foundation's free open-source signing program was submitted on **8 November 2026** and is awaiting review. Approval and a successful production signing run are still required. **The published 0.1.0 release is unsigned.** Existing release files and tags will not be replaced; signing will start with a new release after onboarding.
 
 The attribution for releases signed through this program is:
 

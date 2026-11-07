@@ -1,6 +1,6 @@
 # SignPath Foundation application and setup
 
-This prepares WinPalm for the **free open-source program**, not a paid subscription. Acceptance, account access and a real signing test are pending. The existing 0.1.0 assets remain unsigned and unchanged.
+WinPalm's application for the **free open-source program** was submitted on **8 November 2026**. Acceptance, account access and a real signing test are pending. The existing 0.1.0 assets remain unsigned and unchanged.
 
 ## Application details
 
