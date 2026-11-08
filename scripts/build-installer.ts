@@ -4,12 +4,8 @@ import { createHash } from 'node:crypto'
 import { parseArgs } from 'node:util'
 
 const root = resolve(import.meta.dir, '..')
-const { values } = parseArgs({ args: Bun.argv.slice(2), options: {
-  payloads: { type: 'string' }, output: { type: 'string' },
-  'export-uninstaller': { type: 'string' }, uninstaller: { type: 'string' },
-}, strict: true })
+const { values } = parseArgs({ args: Bun.argv.slice(2), options: { payloads: { type: 'string' }, output: { type: 'string' } }, strict: true })
 if (!values.payloads || !values.output) throw new Error('Usage: bun scripts/build-installer.ts --payloads BUILDS_DIRECTORY --output SETUP.exe')
-if (values['export-uninstaller'] && values.uninstaller) throw new Error('Export or import an uninstaller, not both.')
 const { version } = JSON.parse(readFileSync(resolve(root, 'web/package.json'), 'utf8')) as { version: string }
 if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('Use a stable three-part version.')
 
@@ -63,20 +59,8 @@ if (!compiler || !existsSync(compiler)) throw new Error('Install NSIS 3 (makensi
 mkdirSync(dirname(output), { recursive: true })
 const prefix = process.platform === 'win32' ? '/' : '-'
 const argumentsFor = [`${prefix}DVERSION=${version}`, `${prefix}DX64_DIR=${resolve(payloads, 'x64')}`, `${prefix}DARM64_DIR=${resolve(payloads, 'arm64')}`, `${prefix}DOUTPUT_FILE=${output}`, resolve(root, 'packaging/WinPalm.nsi')]
-if (values['export-uninstaller']) {
-  const exported = resolve(values['export-uninstaller'])
-  mkdirSync(dirname(exported), { recursive: true })
-  argumentsFor.unshift(`${prefix}DEXPORT_UNINSTALLER=${exported}`)
-  if (process.platform === 'win32') argumentsFor.unshift(`${prefix}DHOST_WINDOWS`)
-}
-if (values.uninstaller) {
-  const imported = resolve(values.uninstaller)
-  if (!existsSync(imported) || peInfo(imported).version !== `${version}.0`) throw new Error('The imported uninstaller must match the app version.')
-  argumentsFor.unshift(`${prefix}DIMPORT_UNINSTALLER=${imported}`)
-}
 const result = Bun.spawnSync([compiler, ...argumentsFor], { cwd: root, stdout: 'inherit', stderr: 'inherit' })
 if (result.exitCode !== 0) throw new Error(`NSIS failed (${result.exitCode}).`)
-if (values['export-uninstaller'] && !existsSync(resolve(values['export-uninstaller']))) throw new Error('NSIS did not export the uninstaller.')
 const setup = peInfo(output)
 if (setup.machine !== 0x14c || setup.version !== `${version}.0`) throw new Error('The setup executable has unexpected architecture or version metadata.')
 const checksum = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')

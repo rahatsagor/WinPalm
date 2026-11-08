@@ -8,15 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag, or main for a signing rehearsal
+        description: Existing version tag to release (for example v0.1.0)
         required: true
         type: string
-        default: main
-      test_signing:
-        description: Use a test certificate and never publish (leave enabled for onboarding)
-        required: true
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -28,72 +22,30 @@ concurrency:
 jobs:
   version:
     name: Validate release tag
-    if: github.repository == 'rahatsagor/WinPalm' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       commit: ${{ steps.version.outputs.commit }}
-      version: ${{ steps.version.outputs.version }}
-      test_signing: ${{ steps.version.outputs.test_signing }}
-      signing_policy: ${{ steps.version.outputs.signing_policy }}
     env:
-      RELEASE_REF: ${{ inputs.tag || github.ref_name }}
-      TEST_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.test_signing }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - name: Check signing setup before building
-        shell: bash
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-        run: |
-          if [[ "$RELEASE_REF" != "$GITHUB_REF_NAME" ]]; then
-            echo '::error::Select the same branch/tag in Use workflow from and the tag input so SignPath origin metadata matches the build.'
-            exit 1
-          fi
-          if [[ "$TEST_SIGNING" != true && "$GITHUB_REF" != "refs/tags/$RELEASE_REF" ]]; then
-            echo '::error::Production signing requires running from the version tag. Use main only for a test-signing rehearsal.'
-            exit 1
-          fi
-          if [[ -z "$SIGNPATH_API_TOKEN" || -z "$SIGNPATH_ORGANIZATION_ID" || -z "$SIGNPATH_PROJECT_SLUG" ]]; then
-            echo '::error::Configure SignPath first. See docs/SIGNPATH.md. Unsigned release fallback is disabled.'
-            exit 1
-          fi
-          if [[ "$TEST_SIGNING" != true || "$RELEASE_REF" != main ]]; then
-            [[ "$RELEASE_REF" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.4'
-      - name: Verify source, versions and changelog
+      - name: Verify tag, versions and changelog
         id: version
         shell: bash
-        env:
-          RELEASE_POLICY: ${{ vars.SIGNPATH_RELEASE_POLICY_SLUG || 'release-signing' }}
-          TEST_POLICY: ${{ vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing' }}
         run: |
-          COMMIT="$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$COMMIT" origin/main
-          if [[ "$TEST_SIGNING" == true && "$RELEASE_REF" == main ]]; then
-            VERSION="$(bun -p 'require("./web/package.json").version')"
-          else
-            [[ "$COMMIT" == "$(git rev-parse --verify "refs/tags/$RELEASE_REF^{commit}")" ]]
-            VERSION="${RELEASE_REF#v}"
-          fi
-          bun scripts/release-notes.ts check "$VERSION"
-          [[ "$COMMIT" == "$GITHUB_SHA" ]]
-          if [[ "$TEST_SIGNING" == true ]]; then POLICY="$TEST_POLICY"; else POLICY="$RELEASE_POLICY"; fi
-          {
-            echo "commit=$COMMIT"
-            echo "version=$VERSION"
-            echo "test_signing=$TEST_SIGNING"
-            echo "signing_policy=$POLICY"
-          } >> "$GITHUB_OUTPUT"
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          bun scripts/release-notes.ts check "$RELEASE_TAG"
+          COMMIT="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$COMMIT" == "$(git rev-parse HEAD)" ]]
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
 
   checks:
     name: Validate release
@@ -103,15 +55,12 @@ jobs:
       ref: ${{ needs.version.outputs.commit }}
 
   package:
-    name: Sign app, uninstaller and universal setup
+    name: Build universal setup
     needs: [version, checks]
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      actions: read
-      contents: read
+    timeout-minutes: 15
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -130,89 +79,18 @@ jobs:
           name: winpalm-source
           path: packages
       - name: Install setup compiler
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nsis zip unzip
-      - name: Prepare native binaries and export uninstaller
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nsis
+      - name: Verify native archives and build universal setup
         shell: bash
         run: |
+          VERSION="${RELEASE_TAG#v}"
           (cd packages && sha256sum -c "WinPalm-$VERSION-win-x64.zip.sha256" "WinPalm-$VERSION-win-arm64.zip.sha256")
           mkdir -p "$RUNNER_TEMP/payloads/x64" "$RUNNER_TEMP/payloads/arm64"
           unzip -q "packages/WinPalm-$VERSION-win-x64.zip" -d "$RUNNER_TEMP/payloads/x64"
           unzip -q "packages/WinPalm-$VERSION-win-arm64.zip" -d "$RUNNER_TEMP/payloads/arm64"
-          mkdir -p "$RUNNER_TEMP/unsigned-binaries/"{x64,arm64,uninstaller}
-          bun scripts/build-installer.ts --payloads "$RUNNER_TEMP/payloads" --output "$RUNNER_TEMP/provisional/WinPalm-$VERSION-Setup.exe" --export-uninstaller "$RUNNER_TEMP/unsigned-binaries/uninstaller/Uninstall.exe"
-          for ARCH in x64 arm64; do
-            cp "$RUNNER_TEMP/payloads/$ARCH/WinPalm.exe" "$RUNNER_TEMP/payloads/$ARCH/winpalm_core.dll" "$RUNNER_TEMP/unsigned-binaries/$ARCH/"
-          done
-          echo 'SignPath requires two approvals: first the native app/uninstaller, then the final setup. Each request waits up to 30 minutes.' >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload binaries for source-verified signing
-        id: unsigned_binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: winpalm-unsigned-binaries
-          path: ${{ runner.temp }}/unsigned-binaries/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 3
-      - name: Sign native app and uninstaller
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ needs.version.outputs.signing_policy }}
-          artifact-configuration-slug: binaries
-          github-artifact-id: ${{ steps.unsigned_binaries.outputs.artifact-id }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 1800
-          output-artifact-directory: ${{ runner.temp }}/signed-binaries
-          parameters: |
-            version: "${{ needs.version.outputs.version }}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: winpalm-signed-binaries
-          path: ${{ runner.temp }}/signed-binaries/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 3
-      - name: Package signed binaries and build setup
-        shell: bash
-        run: |
-          for ARCH in x64 arm64; do
-            cp "$RUNNER_TEMP/signed-binaries/$ARCH/WinPalm.exe" "$RUNNER_TEMP/signed-binaries/$ARCH/winpalm_core.dll" "$RUNNER_TEMP/payloads/$ARCH/"
-            rm "packages/WinPalm-$VERSION-win-$ARCH.zip"
-            (cd "$RUNNER_TEMP/payloads/$ARCH" && zip -qr "$GITHUB_WORKSPACE/packages/WinPalm-$VERSION-win-$ARCH.zip" .)
-          done
-          bun scripts/build-installer.ts --payloads "$RUNNER_TEMP/payloads" --output "$RUNNER_TEMP/unsigned-setup/WinPalm-$VERSION-Setup.exe" --uninstaller "$RUNNER_TEMP/signed-binaries/uninstaller/Uninstall.exe"
-      - name: Upload setup for signing
-        id: unsigned_setup
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: winpalm-unsigned-setup
-          path: ${{ runner.temp }}/unsigned-setup/WinPalm-${{ needs.version.outputs.version }}-Setup.exe
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 3
-      - name: Sign universal setup
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ needs.version.outputs.signing_policy }}
-          artifact-configuration-slug: setup
-          github-artifact-id: ${{ steps.unsigned_setup.outputs.artifact-id }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 1800
-          output-artifact-directory: ${{ runner.temp }}/signed-setup
-          parameters: |
-            version: "${{ needs.version.outputs.version }}"
-      - name: Finalize signed release checksums
-        shell: bash
-        run: |
-          cp "$RUNNER_TEMP/signed-setup/WinPalm-$VERSION-Setup.exe" "packages/WinPalm-$VERSION-Setup.exe"
-          cp "packages/WinPalm-$VERSION-Setup.exe" packages/WinPalm-Setup.exe
+          bun scripts/build-installer.ts --payloads "$RUNNER_TEMP/payloads" --output "$GITHUB_WORKSPACE/packages/WinPalm-$VERSION-Setup.exe"
           cmp "packages/WinPalm-$VERSION-Setup.exe" packages/WinPalm-Setup.exe
-          (cd packages && for FILE in ./*.zip ./*.exe; do sha256sum "${FILE#./}" > "$FILE.sha256"; done && sha256sum ./*.zip ./*.exe > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
+          (cd packages && sha256sum "WinPalm-$VERSION-source.zip" > "WinPalm-$VERSION-source.zip.sha256" && sha256sum ./*.zip ./*.exe > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: winpalm-release-files
@@ -235,8 +113,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     env:
-      VERSION: ${{ needs.version.outputs.version }}
-      TEST_SIGNING: ${{ needs.version.outputs.test_signing }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -246,13 +123,9 @@ jobs:
         with:
           name: winpalm-release-files
           path: packages
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: winpalm-signed-binaries
-          path: ${{ runner.temp }}/signed-binaries
       - name: Check real setup, reinstall and uninstall
         shell: pwsh
-        run: ./scripts/test-installer.ps1 -Setup packages/WinPalm-Setup.exe -Architecture '${{ matrix.architecture }}' -Version $env:VERSION -WorkDirectory "$env:RUNNER_TEMP/installer-check" -SignedBinaries "$env:RUNNER_TEMP/signed-binaries" -TestSigning:($env:TEST_SIGNING -eq 'true')
+        run: ./scripts/test-installer.ps1 -Setup packages/WinPalm-Setup.exe -Architecture '${{ matrix.architecture }}' -Version $env:RELEASE_TAG -WorkDirectory "$env:RUNNER_TEMP/installer-check"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -264,14 +137,12 @@ jobs:
   publish:
     name: Publish stable release
     needs: [version, package, installer]
-    if: needs.version.outputs.test_signing == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     env:
-      RELEASE_TAG: v${{ needs.version.outputs.version }}
-      WINPALM_SIGNED_RELEASE: 'true'
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -40,10 +40,10 @@ function readFixture(path: string) {
   return readFileSync(join(fixtureRoot, path), 'utf8')
 }
 
-function runReleaseNotes(command: 'check' | 'notes', version = '0.1.0', repository = 'rahatsagor/WinPalm', signed = false) {
+function runReleaseNotes(command: 'check' | 'notes', version = '0.1.0', repository = 'rahatsagor/WinPalm') {
   return spawnSync(process.execPath, [join(fixtureRoot, 'scripts/release-notes.ts'), command, version], {
     cwd: fixtureRoot,
-    env: { ...process.env, GITHUB_REPOSITORY: repository, WINPALM_SIGNED_RELEASE: signed ? 'true' : '' },
+    env: { ...process.env, GITHUB_REPOSITORY: repository },
     encoding: 'utf8',
   })
 }
@@ -147,17 +147,5 @@ describe('release notes command', () => {
     expect(result.stdout).toContain('https://winpalm.rsapplication.com/docs/')
     expect(result.stdout).toContain('https://winpalm.rsapplication.com/#film')
     expect(result.stdout).toContain('https://cmdpalm.app')
-    expect(result.stdout).toContain('This release is unsigned.')
-    expect(result.stdout).not.toContain('Free code signing provided by')
-    expect(result.stdout).toContain('docs/CODE_SIGNING_POLICY.md')
-  })
-
-  test('attributes signing only when the verified release workflow enables it', () => {
-    writeFixture('CHANGELOG.md', '## [0.1.0] - 2026-01-01\n\n- First release notes.\n')
-    const result = runReleaseNotes('notes', '0.1.0', 'rahatsagor/WinPalm', true)
-    expect(result.status).toBe(0)
-    expect(result.stdout).toContain('Free code signing provided by [SignPath.io]')
-    expect(result.stdout).toContain('certificate by [SignPath Foundation]')
-    expect(result.stdout).not.toContain('This release is unsigned.')
   })
 })

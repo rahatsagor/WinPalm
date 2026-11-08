@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Prepare SignPath Foundation release signing for both native architectures, the uninstaller and universal setup, with public policy and signature verification. Activation requires program approval and account setup.
+- Restore the regular unsigned release workflow and explain browser/Windows installation warnings, install steps and the future signing-certificate funding plan.
 
 ## [0.1.0] - 2026-11-08
 

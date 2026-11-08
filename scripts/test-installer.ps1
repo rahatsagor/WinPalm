@@ -4,9 +4,7 @@ param(
     [Parameter(Mandatory)][string]$Setup,
     [Parameter(Mandatory)][ValidateSet('x64','arm64')][string]$Architecture,
     [Parameter(Mandatory)][string]$Version,
-    [Parameter(Mandatory)][string]$WorkDirectory,
-    [Parameter(Mandatory)][string]$SignedBinaries,
-    [switch]$TestSigning
+    [Parameter(Mandatory)][string]$WorkDirectory
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -42,25 +40,9 @@ function Install-Setup {
     if ($Process.ExitCode -ne 0) { throw "Setup exited with $($Process.ExitCode)." }
 }
 try {
-    $SignatureFiles = @($Setup, (Join-Path $SignedBinaries 'uninstaller/Uninstall.exe'))
-    foreach ($Arch in @('x64','arm64')) {
-        foreach ($Name in @('WinPalm.exe','winpalm_core.dll')) { $SignatureFiles += Join-Path $SignedBinaries "$Arch/$Name" }
-    }
-    & (Join-Path $PSScriptRoot 'verify-signatures.ps1') -Files $SignatureFiles -Version $Version -TestSigning:$TestSigning
-    $Checks.Add('setup, both native apps, both native DLLs and uninstaller pass signing checks')
     Install-Setup
     foreach ($File in @('WinPalm.exe','winpalm_core.dll','web/index.html','web/source.zip','Resources/WinPalm.ico','NSIS-LICENSE.txt','Uninstall.exe')) {
         Require (Test-Path (Join-Path $Install $File) -PathType Leaf) "setup installs $File"
-    }
-    foreach ($Name in @('WinPalm.exe','winpalm_core.dll','Uninstall.exe')) {
-        $Original = if ($Name -eq 'Uninstall.exe') { Join-Path $SignedBinaries "uninstaller/$Name" } else { Join-Path $SignedBinaries "$Architecture/$Name" }
-        Require ((Get-FileHash (Join-Path $Install $Name)).Hash -eq (Get-FileHash $Original).Hash) "setup preserves the signed bytes of $Name"
-    }
-    $Archive = Join-Path ([IO.Path]::GetDirectoryName($Setup)) "WinPalm-$Version-win-$Architecture.zip"
-    $Portable = Join-Path $WorkDirectory 'portable'
-    [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Portable)
-    foreach ($Name in @('WinPalm.exe','winpalm_core.dll')) {
-        Require ((Get-FileHash (Join-Path $Portable $Name)).Hash -eq (Get-FileHash (Join-Path $SignedBinaries "$Architecture/$Name")).Hash) "portable update includes the signed bytes of $Name"
     }
     $Installed = Get-ItemProperty $Registration
     Require ($Installed.DisplayVersion -eq $Version -and $Installed.InstallLocation -eq $Install) 'Installed apps records the expected version and path'

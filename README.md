@@ -65,7 +65,19 @@ keyboard and shortcut deck for Windows.<br />
 
 Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Closing the window keeps WinPalm in the notification area; reopen, pause or quit it from the tray. **Ctrl + Alt + Pause** toggles control when that shortcut is available.
 
-The first release is **unsigned**. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway** only if you trust the download. Smart App Control can block unsigned apps without an individual override. See the [installation docs](https://winpalm.rsapplication.com/docs/) for setup and troubleshooting, and the [Code signing policy](docs/CODE_SIGNING_POLICY.md) for planned SignPath Foundation signing and its current status.
+### Windows download and installation warnings
+
+WinPalm is currently **unsigned**, so Windows cannot verify a trusted publisher signature. New or uncommon unsigned apps can trigger a warning in your browser while downloading and a separate Windows SmartScreen warning when opened. You may therefore see more than one confirmation.
+
+Continue only if you downloaded **WinPalm-Setup.exe** from the [official GitHub Releases](https://github.com/rahatsagor/WinPalm/releases/latest) and trust the project:
+
+1. **Browser download:** if Microsoft Edge says the file **isn't commonly downloaded**, choose **Keep**. If another confirmation appears, choose **Show more → Keep anyway**.
+2. **Windows launch:** open the downloaded installer. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway**, if available.
+3. Finish the normal per-user installation and open WinPalm from Start.
+
+These steps apply to unrecognized-app and reputation warnings. If a warning names a malware threat, stop and [report the exact detection](https://github.com/rahatsagor/WinPalm/issues). **Smart App Control or an organization policy can block unsigned apps without an individual override.** If **Run anyway** is unavailable, contact your administrator on a managed PC or wait for a signed release. We do not recommend disabling antivirus or Smart App Control. See [Microsoft's Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions) and the [installation guide](https://winpalm.rsapplication.com/docs/getting-started/#windows-download-and-installation-warnings).
+
+**Future signing:** we plan to purchase and renew a trusted Windows code-signing certificate if WinPalm gains enough adoption or sponsorship to cover the recurring cost. This will let Windows verify the publisher of future releases. Newly signed apps can still show SmartScreen warnings while reputation builds. [Microsoft explains signing and reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
 
 <details>
 <summary><strong>Prefer a portable copy?</strong></summary>

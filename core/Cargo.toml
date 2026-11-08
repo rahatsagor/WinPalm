@@ -11,9 +11,6 @@ publish = false
 name = "winpalm_core"
 crate-type = ["lib", "cdylib"]
 
-[build-dependencies]
-winresource = { version = "0.1", default-features = false }
-
 [dependencies]
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
