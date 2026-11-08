@@ -35,27 +35,6 @@ keyboard and shortcut deck for Windows.<br />
 
 </div>
 
-## Using a Mac? Meet CmdPalm.
-
-<table>
-<tr>
-<td width="180" align="center" valign="middle">
-<a href="https://cmdpalm.app"><img src="docs/media/cmdpalm.svg" width="140" height="140" alt="CmdPalm app icon" /></a>
-</td>
-<td valign="middle">
-
-<sub>ALSO FROM RS APPLICATION</sub>
-
-### Your Mac, in your palm.
-
-**[CmdPalm](https://cmdpalm.app)** brings the same phone-to-computer idea to macOS, with native Mac input and integrations. Turn your phone into a Mac trackpad, keyboard and shortcut deck.
-
-**[Explore CmdPalm →](https://cmdpalm.app)** · [Mac documentation](https://cmdpalm.app/docs/) · [Source on GitHub](https://github.com/rahatsagor/CmdPalm)
-
-</td>
-</tr>
-</table>
-
 ## Install and connect
 
 1. **[Download WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** and run it. One installer chooses the native x64 or ARM64 app and includes its .NET runtime. No administrator access or separate runtime installation is needed.
@@ -87,6 +66,27 @@ Download the matching `win-x64.zip` or `win-arm64.zip` from [Releases](https://g
 If you used a private development preview, quit it and install 0.1.0 manually once. Preview version numbers do not follow the public release sequence. Existing private device data stays in the same per-user folder.
 
 </details>
+
+## Using a Mac? Meet CmdPalm.
+
+<table>
+<tr>
+<td width="180" align="center" valign="middle">
+<a href="https://github.com/rahatsagor/CmdPalm"><img src="docs/media/cmdpalm.svg" width="140" height="140" alt="CmdPalm app icon" /></a>
+</td>
+<td valign="middle">
+
+<sub>ALSO FROM RS APPLICATION</sub>
+
+### Your Mac, in your palm.
+
+**[CmdPalm](https://github.com/rahatsagor/CmdPalm)** brings the same phone-to-computer idea to macOS, with native Mac input and integrations. Turn your phone into a Mac trackpad, keyboard and shortcut deck.
+
+**[CmdPalm on GitHub →](https://github.com/rahatsagor/CmdPalm)** · [Website](https://cmdpalm.app) · [Mac documentation](https://cmdpalm.app/docs/)
+
+</td>
+</tr>
+</table>
 
 ## Everything you need from the couch
 
