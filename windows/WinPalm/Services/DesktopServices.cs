@@ -47,7 +47,8 @@ internal sealed class DesktopServices : IDisposable
   {
     "listApps" => Apps.List(),
     "appIcon" => Apps.Icon(value.GetProperty("id").GetString()!, value.GetProperty("size").GetInt32()),
-    "appAction" => Apps.Action(value.GetProperty("id").GetString()!, value.GetProperty("op").GetString()!),
+    "appAction" => Apps.Action(value.GetProperty("id").GetString()!, value.GetProperty("op").GetString()!,
+        () => !CoreBridge.Call(new { op = "actionAllowed", id = value.GetProperty("session").GetUInt64() }).GetBoolean()),
     "openUrl" => Open(value.GetString()!),
     "native" => Native(value.GetString()!),
     "automationCommand" => preferences.Automations.TryGetValue(value.GetString()!, out var command) ? command : null,
@@ -57,11 +58,18 @@ internal sealed class DesktopServices : IDisposable
     "setClipboardText" => WriteClipboard(value.GetString()!),
     "beginPaste" => clipboard.Begin(value.GetString()!),
     "endPaste" => EndPaste(),
-    "voiceStart" => speech.Start(value.GetProperty("session").GetUInt64(), value.GetProperty("locale").GetString()),
+    "voiceStart" => StartVoice(value),
     "voiceAudio" => Audio(value),
     "voiceStop" => StopVoice(value),
     _ => null
   };
+  private object StartVoice(JsonElement value)
+  {
+    var request = value.GetProperty("requestId");
+    var started = speech.Start(value.GetProperty("session").GetUInt64(), value.GetProperty("locale").GetString(),
+        request.ValueKind == JsonValueKind.Number ? request.GetUInt32() : null);
+    return new { started, message = started ? null : SpeechService.LastStartupProblem };
+  }
   private object? Audio(JsonElement value) { speech.Audio(value.GetProperty("session").GetUInt64(), Convert.FromBase64String(value.GetProperty("pcm").GetString()!)); return null; }
   private object? StopVoice(JsonElement value) { speech.Stop(value.GetProperty("session").GetUInt64(), value.GetProperty("cancel").GetBoolean()); return null; }
   private object? SetVolume(JsonElement value)

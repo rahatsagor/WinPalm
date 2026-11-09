@@ -42,8 +42,8 @@ impl HostDelegate for Desktop {
         let encoded: String = self.call("appIcon", json!({"id":id,"size":size}))?;
         base64::prelude::BASE64_STANDARD.decode(encoded).ok()
     }
-    fn app_action(&self, id: String, op: AppOp) -> bool {
-        self.call("appAction", json!({"id":id,"op":op})).unwrap_or(false)
+    fn app_action(&self, id: String, op: AppOp, session: u64) -> bool {
+        self.call("appAction", json!({"id":id,"op":op,"session":session})).unwrap_or(false)
     }
     fn open_url(&self, url: String) -> bool {
         self.call("openUrl", json!(url)).unwrap_or(false)
@@ -72,8 +72,15 @@ impl HostDelegate for Desktop {
     fn end_paste(&self) {
         self.call::<Value>("endPaste", Value::Null);
     }
-    fn voice_start(&self, session: u64, locale: Option<String>) -> bool {
-        self.call("voiceStart", json!({"session":session,"locale":locale})).unwrap_or(false)
+    fn voice_start(&self, session: u64, locale: Option<String>, request_id: Option<u32>) -> Result<(), String> {
+        let result: Value = self
+            .call("voiceStart", json!({"session":session,"locale":locale,"requestId":request_id}))
+            .ok_or_else(|| "Windows speech recognition did not respond.".to_string())?;
+        if result["started"].as_bool() == Some(true) {
+            Ok(())
+        } else {
+            Err(result["message"].as_str().unwrap_or("Couldn't start speech recognition on the PC.").to_string())
+        }
     }
     fn voice_audio(&self, session: u64, pcm: Vec<u8>) {
         self.call::<Value>("voiceAudio", json!({"session":session,"pcm":base64::prelude::BASE64_STANDARD.encode(pcm)}));
@@ -115,6 +122,7 @@ fn dispatch(request: Value) -> Result<Value, String> {
     let text = |key: &str| request[key].as_str().unwrap_or_default().to_string();
     let id = || request["id"].as_u64().unwrap_or_default();
     match op {
+        "actionAllowed" => Ok(json!(!host.is_paused() && host.connected_devices().iter().any(|d| d.session == id()))),
         "scanCodes" => Ok(json!(
             (0..=255)
                 .filter_map(|code| crate::input::windows_keys::scan(code)

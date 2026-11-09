@@ -128,8 +128,18 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
         Add("File Explorer", Path.Combine(windowsFolder, "explorer.exe"), Path.Combine(windowsFolder, "explorer.exe"), "builtin:explorer");
         var browser = DefaultBrowser();
         if (browser is not null) Add(DisplayName(browser), browser, browser, "builtin:browser");
-        else Add("Microsoft Edge", "microsoft-edge:about:blank", null, "builtin:browser");
-        Add("Windows Terminal", Path.Combine(apps, "wt.exe"), null, "builtin:terminal", "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App");
+        else
+        {
+          var edge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
+          Add("Microsoft Edge", "microsoft-edge:about:blank", File.Exists(edge) ? edge : null, "builtin:browser");
+        }
+        var terminal = Path.Combine(apps, "wt.exe");
+        if (File.Exists(terminal)) Add("Windows Terminal", terminal, null, "builtin:terminal", "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App");
+        else
+        {
+          var powershell = Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe");
+          Add("Windows PowerShell", powershell, powershell, "builtin:terminal");
+        }
         // Windows 11's Notepad is packaged; System32\notepad.exe starts it.
         Add("Notepad", Path.Combine(system, "notepad.exe"), Path.Combine(system, "notepad.exe"), "builtin:notepad", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App");
         Add("Calculator", "calculator:", null, "builtin:calculator", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
@@ -191,10 +201,12 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
       lock (gate) { entries = found; scans++; if (generation == started) refreshed = DateTime.UtcNow; }
     }
   }
-  internal bool Action(string id, string operation)
+  internal bool Action(string id, string operation, Func<bool>? cancelled = null)
   {
+    cancelled ??= () => false;
+    if (cancelled()) return false;
     Refresh(); Entry? entry; lock (gate) entries.TryGetValue(id, out entry);
-    if (entry is null) return false;
+    if (entry is null || cancelled()) return false;
     var windows = Windows().Where(w => Matches(w, entry)).ToArray();
     if (operation == "quit") { foreach (var window in windows) Win32.PostMessageW(window.Handle, 0x10, 0, 0); return windows.Length != 0; }
     if (operation == "hide") { foreach (var window in windows) Win32.ShowWindowAsync(window.Handle, 6); return windows.Length != 0; }
@@ -202,7 +214,7 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
     if (existing.Handle != 0)
     {
       if (operation == "toggle" && existing.Handle == Win32.GetForegroundWindow()) return Win32.ShowWindowAsync(existing.Handle, 6);
-      return Win32.Activate(existing.Handle);
+      return WaitForActivation(entry, cancelled);
     }
     try
     {
@@ -210,16 +222,31 @@ internal sealed class AppCatalog(StaWorker worker, Func<IReadOnlyList<string>> f
       else if (id == "builtin:terminal")
       {
         var terminal = entry.Launch;
-        Process.Start(new ProcessStartInfo(File.Exists(terminal) ? terminal : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe")) { UseShellExecute = true });
+        if (!File.Exists(terminal))
+        {
+          terminal = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+          entry = entry with { Executable = terminal, AppId = null };
+        }
+        Process.Start(new ProcessStartInfo(terminal) { UseShellExecute = true });
       }
       else Process.Start(new ProcessStartInfo(entry.Launch) { UseShellExecute = true });
-      // A just-started app may open behind the foreground window; let
-      // Windows give it focus.
+      // Packaged launchers may return before they create any window.
       Win32.AllowSetForegroundWindow(-1);
-      Invalidate(); return true;
+      Invalidate(); return WaitForActivation(entry, cancelled);
     }
     catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { Diagnostics.Record(error); return false; }
   }
+  private bool WaitForActivation(Entry entry, Func<bool> cancelled) => ActivationWait.Run(() =>
+  {
+    var matches = Windows().Where(window => Matches(window, entry)).ToArray();
+    var foreground = Win32.GetForegroundWindow();
+    if (matches.Any(window => window.Handle == foreground)) return true;
+    var window = matches.FirstOrDefault();
+    if (window.Handle == 0 || cancelled()) return false;
+    Win32.Activate(window.Handle);
+    // SetForegroundWindow can return before activation has completed.
+    return Win32.GetForegroundWindow() == window.Handle;
+  }, cancelled);
   internal string? Icon(string id, int size)
   {
     Refresh(); Entry? entry; lock (gate) entries.TryGetValue(id, out entry);

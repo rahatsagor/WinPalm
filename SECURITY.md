@@ -16,11 +16,17 @@ PowerShell and named automations are disabled by default. Both require the owner
 
 App actions accept catalog identifiers rather than arbitrary phone-supplied executable paths. Owner-selected app folders are trusted launch sources. App close is a graceful request, so applications can ask to save work. Display brightness and media commands depend on OS, app and hardware support.
 
+App-opening sequences wait for the intended window to become active, with a bounded timeout and checks for pause or disconnect. Windows session lock, remote-session disconnection and sleep are tracked independently; ending one does not resume control while another remains active.
+
 ## Data and privacy
 
 Per-user data is stored under `%LOCALAPPDATA%\RS Application\WinPalm`. Its directory ACL grants access to the current Windows user and SYSTEM. Files include pairing-token hashes, preferences, shared deck, device settings and local TLS key material. File replacement is atomic. Backups may contain the same sensitive material and should be protected.
 
 The phone retains its reconnect token and settings in browser storage. Dictation audio is sent to an installed local Windows speech recognizer; there is no cloud transcription integration. Audio queues are bounded and discarded on cancellation. Clipboard paste snapshots formats and restores them after the paste only if the clipboard has not changed meanwhile; formats that can't be read are left out of the restore. The temporary paste text is marked so Windows clipboard history, cloud clipboard sync and clipboard managers skip it. Clipboard contents that a password manager marks the same way are never sent to the phone.
+
+Device setup exports include settings, gesture actions and custom keyboards. They exclude pairing tokens, device identity and the shared Deck. These files can still contain private shortcut labels or configured actions, so protect them accordingly. Restores validate the complete file before replacing a setup and preserve the current device's identity. Deck edits and phone settings are acknowledged after successful persistence; rejected or unconfirmed edits remain available for review or retry.
+
+Dictation messages carry the recording's request ID through the phone, core and Windows recognizer. Cancelling control clears accepted recordings, so late recognition from a cancelled session is ignored even after control resumes.
 
 WinPalm has no analytics or accounts. Automatic GitHub release checks send the app user agent and ordinary network metadata to GitHub; they send no input, paired-device or settings data. Update downloads start only when the owner chooses Download and restart. Normal app/website actions intentionally open their configured destinations using Windows. Diagnostic logs are bounded and contain error classes/codes; they exclude input, speech, clipboard content and pairing secrets. Protect test reports as ordinary local diagnostic files, since exception details can include paths.
 

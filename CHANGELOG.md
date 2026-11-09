@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
+Undo Deck edits, back up your phone's setup, and keep unsaved changes ready to retry. Sequences wait for opened apps, dictation replies stay with their recording, and waking a locked PC keeps control paused.
+
+### Deck
+
+- Undo and redo confirmed edits, including deleted buttons and pages. Newer changes from another device clear the local history.
+- Keep editor drafts after save failures, disconnects and conflicts. Saves wait for the PC to confirm persistence and reject stale revisions.
+- Keep a held button tied to its identity when another device reorders the page, and cancel unfinished drags after remote changes.
+
+### Device backups and settings
+
+- Export and restore phone settings and custom keyboards from **Settings → Back up or restore this device**. Review the backup before restoring it. Pairing tokens are excluded, and the current device's name and pairing are preserved.
+- Reject damaged, unsupported and oversized backups before replacing any setup. Shared Deck backups remain in the PC's Deck settings.
+- Confirm settings were saved on the PC, retry temporary failures, and offer **Retry saving to the PC** in the phone's Settings while retaining the setup on the phone.
+
+### Windows and voice
+
+- Wait for an opened app's window to become active before continuing a sequence. Stop on activation failure, timeout, pause or disconnect.
+- Keep control paused until overlapping Windows lock, remote disconnect and sleep pauses have all ended. Preserve an existing manual pause.
+- Keep dictation replies tied to their recording, discard cancelled results after pause or disable, and prevent starting the microphone while control is paused.
+- Release held input promptly even while a Windows recognizer is starting. Limit active and finishing recognizers together, clean them up on cancellation, and preserve specific Windows startup error messages.
+
+### Maintenance
+
 - Restore the regular unsigned release workflow and explain browser/Windows installation warnings, install steps and the future signing-certificate funding plan.
 
 ## [0.1.0] - 2026-11-08

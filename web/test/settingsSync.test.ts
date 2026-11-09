@@ -377,3 +377,107 @@ describe('relative times', () => {
     expect(sync.ago(NOW - 86_400_000, NOW)).toBe('yesterday')
   })
 })
+
+describe('confirmed settings backups', () => {
+  const result = (socket: FakeSocket, ok: boolean, message?: string) => {
+    const request = saves(socket).at(-1)!
+    socket.receive({ t: 'settingsSaved', id: request.id, ok, updatedAt: ok ? request.updatedAt : 0, message })
+  }
+
+  function advanceConnected(socket: FakeSocket, duration: number) {
+    for (let elapsed = 0; elapsed < duration; elapsed += 1000) {
+      vi.advanceTimersByTime(Math.min(1000, duration - elapsed))
+      socket.receive({ t: 'pong', id: 1 })
+    }
+  }
+
+  it('waits for the matching persistence acknowledgement', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.theme = 'dark'
+    await settle()
+    const request = saves(socket)[0]!
+    expect(request.id).toEqual(expect.any(Number))
+    expect(sync.settingsBackup.saving).toBe(true)
+    socket.receive({ t: 'settingsSaved', id: 999, ok: true, updatedAt: NOW })
+    expect(sync.settingsBackup.saving).toBe(true)
+    result(socket, true)
+    expect(sync.settingsBackup).toMatchObject({ saving: false, error: '' })
+    expect(saves(socket)).toHaveLength(1)
+  })
+
+  it('sends newer local changes after the pending save is confirmed', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.pointerSpeed = 1.5
+    await settle()
+    prefs.settings.pointerSpeed = 2
+    await settle()
+    expect(saves(socket)).toHaveLength(1)
+    result(socket, true)
+    expect(saves(socket)).toHaveLength(2)
+    expect((saves(socket)[1]!.settings as { settings: { pointerSpeed: number } }).settings.pointerSpeed).toBe(2)
+    result(socket, true)
+    expect(sync.settingsBackup.saving).toBe(false)
+  })
+
+  it('keeps a rejected save dirty and retries without changing its timestamp', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.theme = 'dark'
+    await settle()
+    const first = saves(socket)[0]!
+    result(socket, false, 'The PC disk is full.')
+    expect(prefs.settings.theme).toBe('dark')
+    expect(sync.settingsBackup.error).toBe('The PC disk is full.')
+    advanceConnected(socket, 2000)
+    const retry = saves(socket)[1]!
+    expect(retry.id).not.toBe(first.id)
+    expect(retry.updatedAt).toBe(first.updatedAt)
+    result(socket, true)
+    expect(sync.settingsBackup.error).toBe('')
+  })
+
+  it('times out and allows an explicit retry, ignoring the expired acknowledgement', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.theme = 'dark'
+    await settle()
+    const expired = saves(socket)[0]!
+    advanceConnected(socket, 8000)
+    expect(sync.settingsBackup.error).toContain('hasn’t confirmed')
+    sync.retrySettingsBackup()
+    expect(saves(socket)).toHaveLength(2)
+    socket.receive({ t: 'settingsSaved', id: expired.id, ok: true, updatedAt: expired.updatedAt })
+    expect(sync.settingsBackup.saving).toBe(true)
+    result(socket, true)
+    expect(sync.settingsBackup.saving).toBe(false)
+  })
+
+  it('bounds automatic retries and retains a manual retry after repeated failures', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.theme = 'dark'
+    await settle()
+    for (const delay of [2000, 5000, 15_000]) {
+      result(socket, false, 'Disk full.')
+      advanceConnected(socket, delay)
+    }
+    result(socket, false, 'Disk full.')
+    advanceConnected(socket, 30_000)
+    expect(saves(socket)).toHaveLength(4)
+    expect(sync.settingsBackup.saving).toBe(false)
+    sync.retrySettingsBackup()
+    expect(saves(socket)).toHaveLength(5)
+    result(socket, true)
+  })
+
+  it('reconciles unconfirmed settings after reconnecting', async () => {
+    const socket = connect({ settingsSaveAck: true })
+    prefs.settings.theme = 'dark'
+    await settle()
+    conn.disconnect(false)
+    expect(sync.settingsBackup.saving).toBe(false)
+    expect(sync.settingsBackup.error).toContain('Reconnect')
+    const reconnected = connect({ settingsSaveAck: true })
+    expect(saves(reconnected)).toHaveLength(1)
+    result(reconnected, true)
+    expect(sync.settingsBackup.error).toBe('')
+    expect(saves(socket)).toHaveLength(1)
+  })
+})

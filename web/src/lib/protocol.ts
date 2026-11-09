@@ -179,13 +179,13 @@ export type ClientMessage =
   | { t: 'release' }
   | { t: 'apps' }
   | { t: 'appAction'; id: string; op: AppOp }
-  | { t: 'deckSave'; deck: Deck }
+  | { t: 'deckSave'; deck: Deck; id?: number; revision?: number }
   | { t: 'volume'; value?: number; muted?: boolean }
   | { t: 'clipboardSet'; text: string }
   | { t: 'clipboardGet' }
-  | { t: 'voiceStart'; locale?: string }
-  | { t: 'voiceStop'; cancel?: boolean }
-  | ({ t: 'settingsSave' } & SavedSettings)
+  | { t: 'voiceStart'; locale?: string; id?: number }
+  | { t: 'voiceStop'; cancel?: boolean; id?: number }
+  | ({ t: 'settingsSave'; id?: number } & SavedSettings)
   | { t: 'settingsList' }
   | { t: 'settingsCopy'; from: string; id?: number }
 
@@ -238,6 +238,7 @@ export type ServerMessage =
       token?: string
       features: Features
       deck: Deck
+      deckRevision?: number
       layout?: KeyboardLayout
       volume?: VolumeState
       paused: boolean
@@ -245,13 +246,15 @@ export type ServerMessage =
       capsLock?: boolean
       /** This device's settings saved on the PC earlier, if any. */
       settings?: SavedSettings
+      settingsSaveAck?: boolean
     }
   | { t: 'pending' }
   | { t: 'denied'; reason: DenyReason; retryAfter?: number }
   | { t: 'pong'; id: number }
   | { t: 'apps'; apps: AppEntry[] }
   | { t: 'appsChanged' }
-  | { t: 'deck'; deck: Deck }
+  | { t: 'deck'; deck: Deck; revision?: number }
+  | { t: 'deckSaved'; id: number; ok: boolean; revision: number; message?: string }
   | { t: 'layout'; layout: KeyboardLayout }
   | ({ t: 'volume' } & VolumeState)
   | { t: 'volumeUnavailable' }
@@ -260,9 +263,10 @@ export type ServerMessage =
   | { t: 'features'; features: Features }
   | { t: 'notice'; level: 'info' | 'warning' | 'error'; code: string; message: string }
   | { t: 'clipboard'; text: string }
-  | { t: 'voice'; state: VoiceState; text?: string; final: boolean; message?: string }
+  | { t: 'voice'; id?: number; state: VoiceState; text?: string; final: boolean; message?: string }
   | { t: 'actionResult'; id?: number; ok: boolean; message?: string }
   | { t: 'settingsList'; devices: SettingsSource[] }
+  | { t: 'settingsSaved'; id: number; ok: boolean; updatedAt: number; message?: string }
   | ({ t: 'settings'; id?: number } & SavedSettings)
   /** `reconnect`: the PC stopped or restarted its server, so retry with the token. */
   | { t: 'bye'; reason: string; reconnect?: boolean }

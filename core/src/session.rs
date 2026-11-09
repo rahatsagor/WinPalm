@@ -26,7 +26,7 @@ use crate::protocol::{
     Action, AuthRequest, ClientMessage, DenyReason, DeviceInfo, HostInfo, NoticeLevel, PROTOCOL_VERSION, ServerMessage,
     SettingsSource, TextMode, VoiceState, binary,
 };
-use crate::server::{deck_ticket, save_deck_as};
+use crate::server::{deck_ticket, save_deck_version};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -47,8 +47,8 @@ const MAX_VOICE_STARTS: usize = 4;
 const PASTE_QUEUE_TIMEOUT: Duration = Duration::from_secs(3);
 
 enum VoiceOp {
-    Start { locale: Option<String>, epoch: u64 },
-    Stop { cancel: bool },
+    Start { locale: Option<String>, request_id: Option<u32>, epoch: u64 },
+    Stop { cancel: bool, request_id: Option<u32> },
 }
 
 /// Runs voice starts and stops one at a time, in the order they arrived, so
@@ -64,25 +64,51 @@ async fn voice_worker(
         let shared = shared.clone();
         let starts = starts.clone();
         let _ = tokio::task::spawn_blocking(move || match op {
-            VoiceOp::Start { locale, epoch } => {
-                let allowed = || {
-                    !shared.should_stop(id)
-                        && shared.config().voice_available
-                        && shared.interrupts.voice_epoch() == epoch
-                };
-                let started = allowed() && shared.delegate.voice_start(id, locale);
-                if started && !allowed() {
-                    shared.delegate.voice_stop(id, true);
-                }
+            VoiceOp::Start { locale, request_id, epoch } => {
+                let mut voices = shared.voices();
                 starts.fetch_sub(1, AtomicOrdering::SeqCst);
-                if !started {
-                    shared.send_to(
-                        id,
-                        voice(VoiceState::Unavailable, Some("Couldn't start speech recognition on the PC.")),
-                    );
+                if shared.voice_epoch.load(AtomicOrdering::SeqCst) != epoch
+                    || shared.should_stop(id)
+                    || !shared.config().voice_available
+                {
+                    return;
+                }
+                let started = shared.delegate.voice_start(id, locale, request_id);
+                if started.is_ok() {
+                    voices.active.insert(id, request_id);
+                    let accepted = voices.accepted.entry(id).or_default();
+                    if !accepted.contains(&request_id) {
+                        accepted.push(request_id);
+                    }
+                    if accepted.len() > 8 {
+                        accepted.remove(0);
+                    }
+                }
+                if let Err(message) = started {
+                    shared.send_to(id, voice(request_id, VoiceState::Unavailable, Some(&message)));
                 }
             }
-            VoiceOp::Stop { cancel } => shared.delegate.voice_stop(id, cancel),
+            VoiceOp::Stop { cancel, request_id } => {
+                let mut voices = shared.voices();
+                if cancel {
+                    if request_id.is_none() {
+                        voices.accepted.remove(&id);
+                    } else if let Some(accepted) = voices.accepted.get_mut(&id) {
+                        accepted.retain(|value| *value != request_id);
+                    }
+                }
+                if voices.active.get(&id).is_some_and(|active| request_id.is_none() || *active == request_id) {
+                    if cancel {
+                        // The native host cancels all finishing recognizers
+                        // for this device along with the active recording.
+                        voices.accepted.remove(&id);
+                    }
+                    shared.delegate.voice_stop(id, cancel);
+                    if cancel {
+                        voices.active.remove(&id);
+                    }
+                }
+            }
         })
         .await;
     }
@@ -203,11 +229,13 @@ pub(crate) async fn run<S>(
             token: authorized.token,
             features,
             deck: state.deck.clone(),
+            deck_revision: state.deck_revision,
             layout: state.layout.clone(),
             volume: state.volume,
             paused: state.paused,
             caps_lock: state.caps_lock,
             settings: saved_settings,
+            settings_save_ack: true,
         })
     };
     let Some(welcome) = welcome else {
@@ -235,7 +263,7 @@ pub(crate) async fn run<S>(
         jobs,
         voice_ops,
         voice_starts,
-        voice: false,
+        voice: None,
         last_heard: Instant::now(),
         in_flight: Arc::new(AtomicUsize::new(0)),
         apps_requested: 0,
@@ -293,9 +321,7 @@ pub(crate) async fn run<S>(
     shared.state().sessions.remove(&id);
     shared.engine(Command::EndSession(id));
     worker.abort();
-    if conn.voice {
-        let _ = conn.voice_ops.send(VoiceOp::Stop { cancel: true });
-    }
+    let _ = conn.voice_ops.send(VoiceOp::Stop { cancel: true, request_id: None });
     // Dropping the sender lets the voice worker finish what is queued, then exit.
     drop(conn);
     shared.emit(HostEvent::SessionsChanged);
@@ -475,7 +501,8 @@ struct Connection {
     jobs: mpsc::Sender<Job>,
     voice_ops: mpsc::UnboundedSender<VoiceOp>,
     voice_starts: Arc<AtomicUsize>,
-    voice: bool,
+    /// Some(None) is a dictation started by a client without request IDs.
+    voice: Option<Option<u32>>,
     last_heard: Instant,
     in_flight: Arc<AtomicUsize>,
     /// App lists asked for, and the newest one sent. Lists are made on
@@ -507,6 +534,13 @@ fn f32_at(data: &[u8], at: usize) -> Option<f64> {
 }
 
 impl Connection {
+    fn deck_result(&self, id: Option<u32>, ok: bool, message: Option<String>) -> ServerMessage {
+        match id {
+            Some(id) => ServerMessage::DeckSaved { id, ok, revision: self.shared.state().deck_revision, message },
+            None => notice(NoticeLevel::Error, "deck", message.as_deref().unwrap_or("The deck wasn't saved.")),
+        }
+    }
+
     fn input(&self, input: Input) {
         self.shared.engine(Command::Input { session: self.id, input });
     }
@@ -681,26 +715,33 @@ impl Connection {
                 });
                 None
             }
-            ClientMessage::DeckSave { deck } => {
+            ClientMessage::DeckSave { deck, id, revision } => {
                 if let Err(err) = deck.validate() {
-                    return Some(notice(NoticeLevel::Error, "deck", &err.to_string()));
+                    return Some(self.deck_result(id, false, Some(err.to_string())));
                 }
                 // Saving syncs to disk, so it runs off the network threads. The
                 // ticket, taken in arrival order, keeps an older save from
                 // landing after a newer one.
                 let ticket = deck_ticket(&self.shared);
                 let accepted = self.try_blocking(move |shared| {
-                    save_deck_as(shared, deck, ticket)
-                        .err()
-                        .map(|err| notice(NoticeLevel::Error, "deck", &err.to_string()))
+                    let result = save_deck_version(shared, deck, ticket, revision);
+                    match id {
+                        Some(id) => Some(ServerMessage::DeckSaved {
+                            id,
+                            ok: result.is_ok(),
+                            revision: result.as_ref().copied().unwrap_or_else(|_| shared.state().deck_revision),
+                            message: result.err().map(|e| e.to_string()),
+                        }),
+                        None => result.err().map(|err| notice(NoticeLevel::Error, "deck", &err.to_string())),
+                    }
                 });
-                // The phone shows its change before the PC confirms it, and
-                // takes it back when a notice about the deck arrives.
+                // Reply even when no worker can be started, so the editor
+                // keeps its draft instead of waiting for a missing echo.
                 (!accepted).then(|| {
-                    notice(
-                        NoticeLevel::Warning,
-                        "deck",
-                        "The PC is still busy, so the deck wasn’t changed. Try again in a moment.",
+                    self.deck_result(
+                        id,
+                        false,
+                        Some("The PC is still busy, so the deck wasn’t changed. Try again in a moment.".into()),
                     )
                 })
             }
@@ -735,9 +776,10 @@ impl Connection {
                 });
                 None
             }
-            ClientMessage::VoiceStart { locale } => {
+            ClientMessage::VoiceStart { locale, id: request_id } => {
                 if !self.shared.config().voice_available {
                     return Some(voice(
+                        request_id,
                         VoiceState::Unavailable,
                         Some("Speech recognition isn't available on this PC."),
                     ));
@@ -746,32 +788,49 @@ impl Connection {
                     .filter(|l| l.len() <= 32 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
                 if self.voice_starts.fetch_add(1, AtomicOrdering::SeqCst) >= MAX_VOICE_STARTS {
                     self.voice_starts.fetch_sub(1, AtomicOrdering::SeqCst);
-                    return Some(voice(VoiceState::Unavailable, Some("The PC is still busy. Try again in a moment.")));
+                    return Some(voice(
+                        request_id,
+                        VoiceState::Unavailable,
+                        Some("The PC is still busy. Try again in a moment."),
+                    ));
                 }
-                if self.voice_ops.send(VoiceOp::Start { locale, epoch: self.shared.interrupts.voice_epoch() }).is_err()
-                {
+                let epoch = self.shared.voice_epoch.load(AtomicOrdering::SeqCst);
+                if self.voice_ops.send(VoiceOp::Start { locale, request_id, epoch }).is_err() {
                     self.voice_starts.fetch_sub(1, AtomicOrdering::SeqCst);
                     return None;
                 }
-                self.voice = true;
+                self.voice = Some(request_id);
                 None
             }
-            ClientMessage::SettingsSave { settings, updated_at } => {
+            ClientMessage::SettingsSave { settings, updated_at, id } => {
                 if !self.remembered {
-                    return None;
+                    return id.and_then(|id| {
+                        settings_result(
+                            Some(id),
+                            Err("Pair with Remember this device enabled to save your setup on the PC.".into()),
+                        )
+                    });
                 }
                 let device = self.device_id.clone();
-                self.blocking(move |shared| {
+                let accepted = self.try_blocking(move |shared| {
                     let saved = SavedSettings { settings, updated_at };
                     let mut store = shared.device_settings();
                     // The device may have been removed on the PC since it sent
                     // these; saving them would bring its settings back.
                     if !shared.state().trust.contains(&device) {
-                        return None;
+                        return settings_result(id, Err("This device was removed on the PC. Pair again.".into()));
                     }
-                    store.set(&device, saved).err().map(|e| notice(NoticeLevel::Error, "settings", &e.to_string()))
+                    let result = store
+                        .set(&device, saved)
+                        .map(|_| store.get(&device).map_or(updated_at, |saved| saved.updated_at))
+                        .map_err(|error| error.to_string());
+                    settings_result(id, result)
                 });
-                None
+                if accepted {
+                    None
+                } else {
+                    settings_result(id, Err("The PC is still busy. Your setup will be retried.".into()))
+                }
             }
             // Only remembered devices keep settings on the PC, so only they
             // may see and copy other devices' settings.
@@ -806,9 +865,10 @@ impl Connection {
                 Some(saved) => Some(ServerMessage::Settings { saved: saved.clone(), id }),
                 None => Some(notice(NoticeLevel::Warning, "settings", "Those settings are no longer on this PC.")),
             },
-            ClientMessage::VoiceStop { cancel } => {
-                if std::mem::take(&mut self.voice) {
-                    let _ = self.voice_ops.send(VoiceOp::Stop { cancel });
+            ClientMessage::VoiceStop { cancel, id: request_id } => {
+                if self.voice.is_some() && (request_id.is_none() || self.voice == Some(request_id)) {
+                    self.voice = None;
+                    let _ = self.voice_ops.send(VoiceOp::Stop { cancel, request_id });
                 }
                 None
             }
@@ -829,7 +889,11 @@ impl Connection {
                 .map(|(kind, value)| Input::Gesture { kind, phase: data[2], value }),
             (binary::AUDIO, len) if len > 1 && len % 2 == 1 => {
                 self.shared.engine(Command::Alive(self.id));
-                if self.voice && !self.shared.interrupts.paused() {
+                if self.voice.is_some() && !self.shared.interrupts.paused() && self.shared.config().voice_available {
+                    let voices = self.shared.voices();
+                    if !voices.active.contains_key(&self.id) {
+                        return;
+                    }
                     self.shared.delegate.voice_audio(self.id, data[1..].to_vec());
                 }
                 None
@@ -862,6 +926,10 @@ fn unreadable_reply(text: &str) -> Option<ServerMessage> {
             "deck",
             "The PC couldn’t read the changed deck, so it wasn’t saved. Reload WinPalm on this device and try again.",
         )),
+        "settingsSave" => settings_result(
+            value.get("id").and_then(serde_json::Value::as_u64).and_then(|id| u32::try_from(id).ok()),
+            Err("The PC couldn’t read these settings. Reload WinPalm and try again.".into()),
+        ),
         _ => None,
     }
 }
@@ -886,7 +954,7 @@ fn paused_reply(message: &ClientMessage) -> Option<Option<ServerMessage>> {
         | ClientMessage::Text { .. }
         | ClientMessage::ClipboardSet { .. }
         | ClientMessage::ClipboardGet => Some(Some(notice(NoticeLevel::Warning, "paused", PAUSED))),
-        ClientMessage::VoiceStart { .. } => Some(Some(voice(VoiceState::Unavailable, Some(PAUSED)))),
+        ClientMessage::VoiceStart { id, .. } => Some(Some(voice(*id, VoiceState::Unavailable, Some(PAUSED)))),
         ClientMessage::Key { .. }
         | ClientMessage::Tap { .. }
         | ClientMessage::Button { .. }
@@ -900,6 +968,18 @@ fn notice(level: NoticeLevel, code: &str, message: &str) -> ServerMessage {
     ServerMessage::Notice { level, code: code.into(), message: message.into() }
 }
 
-fn voice(state: VoiceState, message: Option<&str>) -> ServerMessage {
-    ServerMessage::Voice { state, text: None, is_final: false, message: message.map(Into::into) }
+fn settings_result(id: Option<u32>, result: Result<u64, String>) -> Option<ServerMessage> {
+    match id {
+        Some(id) => Some(ServerMessage::SettingsSaved {
+            id,
+            ok: result.is_ok(),
+            updated_at: result.as_ref().copied().unwrap_or(0),
+            message: result.err(),
+        }),
+        None => result.err().map(|message| notice(NoticeLevel::Error, "settings", &message)),
+    }
+}
+
+fn voice(id: Option<u32>, state: VoiceState, message: Option<&str>) -> ServerMessage {
+    ServerMessage::Voice { id, state, text: None, is_final: false, message: message.map(Into::into) }
 }

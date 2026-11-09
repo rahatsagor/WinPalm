@@ -21,8 +21,12 @@ struct MockDelegate {
     events: Mutex<Vec<HostEvent>>,
     opened: Mutex<Vec<String>>,
     voice: Mutex<Vec<&'static str>>,
+    app_failure: std::sync::atomic::AtomicBool,
+    speech_problem: Mutex<Option<String>>,
     starting_voice: std::sync::atomic::AtomicBool,
     recognizing: std::sync::atomic::AtomicBool,
+    voice_requests: Mutex<Vec<Option<u32>>>,
+    voice_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     /// The events posted so far, to tell when each call below happened.
     posted: SharedRecorder,
     /// App and link calls, with how many events were posted by then.
@@ -66,10 +70,10 @@ impl HostDelegate for MockDelegate {
     fn app_icon(&self, _id: String, _size: u32) -> Option<Vec<u8>> {
         Some(b"\x89PNG".to_vec())
     }
-    fn app_action(&self, id: String, _op: AppOp) -> bool {
+    fn app_action(&self, id: String, _op: AppOp, _session: u64) -> bool {
         self.call(format!("app {id}"));
         self.opened.lock().unwrap().push(id);
-        true
+        !self.app_failure.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
     fn open_url(&self, url: String) -> bool {
         self.call(format!("url {url}"));
@@ -96,16 +100,27 @@ impl HostDelegate for MockDelegate {
         true
     }
     fn end_paste(&self) {}
-    fn voice_start(&self, _session: u64, _locale: Option<String>) -> bool {
+    fn voice_start(&self, _session: u64, _locale: Option<String>, request_id: Option<u32>) -> Result<(), String> {
+        if let Some(problem) = self.speech_problem.lock().unwrap().take() {
+            return Err(problem);
+        }
         // Starting recognition is slow; a stop sent meanwhile must wait for it.
         self.starting_voice.store(true, std::sync::atomic::Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(100));
+        if let Some((started, ready)) = self.voice_gate.lock().unwrap().take() {
+            started.send(()).unwrap();
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        } else {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        self.voice_requests.lock().unwrap().push(request_id);
         self.recognizing.store(true, std::sync::atomic::Ordering::SeqCst);
         self.starting_voice.store(false, std::sync::atomic::Ordering::SeqCst);
         self.voice.lock().unwrap().push("start");
-        true
+        Ok(())
     }
-    fn voice_audio(&self, _session: u64, _pcm: Vec<u8>) {}
+    fn voice_audio(&self, _session: u64, _pcm: Vec<u8>) {
+        self.voice.lock().unwrap().push("audio");
+    }
     fn voice_stop(&self, _session: u64, _cancel: bool) {
         self.recognizing.store(false, std::sync::atomic::Ordering::SeqCst);
         self.voice.lock().unwrap().push("stop");
@@ -762,6 +777,7 @@ fn voice_stops_after_it_starts_even_when_sent_right_away() {
         send(&mut ws, json!({"t": "voiceStart"})).await;
         send(&mut ws, json!({"t": "voiceStop", "cancel": false})).await;
         send(&mut ws, json!({"t": "voiceStart"})).await;
+        wait_for_voice(&f.delegate, 3).await;
         drop(ws);
     });
     std::thread::sleep(Duration::from_millis(400));
@@ -925,4 +941,388 @@ fn input_sent_after_a_paste_waits_for_its_command_v() {
     let down = |key| events.iter().position(|e| matches!(e, Synth::Key { code, down: true, .. } if *code == key));
     let (pasted, returned) = (down(KEY_V).expect("⌘V posted"), down(KEY_RETURN).expect("Return posted"));
     assert!(pasted < returned, "Return arrived before the paste: {events:?}");
+}
+
+async fn wait_for_voice(delegate: &MockDelegate, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while delegate.voice.lock().unwrap().len() < count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("voice operation did not finish");
+}
+
+#[test]
+fn disabling_dictation_cancels_recognition_and_refuses_later_audio_and_results() {
+    let f = fixture();
+    let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        send(&mut ws, hello("phone", json!({"method": "pair", "code": code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t": "voiceStart", "id": 17})).await;
+        wait_for_voice(&f.delegate, 1).await;
+        let session = f.host.connected_devices()[0].session;
+        let mut config = f.config.clone();
+        config.voice_available = false;
+        f.host.update_config(config);
+        let stopped = recv_kind(&mut ws, "voice").await;
+        assert_eq!(stopped["state"], "unavailable", "older clients need a voice reply to release their microphone");
+        assert_eq!(stopped["id"], 17);
+        assert_eq!(recv_kind(&mut ws, "features").await["features"]["voice"], false);
+        assert_eq!(f.delegate.voice.lock().unwrap().as_slice(), ["start", "stop"]);
+        ws.send(Message::Binary(vec![crate::protocol::binary::AUDIO, 0, 0].into())).await.unwrap();
+        f.host.voice_update(
+            session,
+            crate::api::VoiceUpdate {
+                request_id: Some(17),
+                state: crate::protocol::VoiceState::Listening,
+                text: Some("late text".into()),
+                is_final: true,
+                message: None,
+            },
+        );
+        send(&mut ws, json!({"t": "ping", "id": 99})).await;
+        loop {
+            let message = recv(&mut ws).await;
+            assert_ne!(message["t"], "voice", "revoked recognition must not reach the phone");
+            if message["t"] == "pong" {
+                break;
+            }
+        }
+        assert!(!f.delegate.voice.lock().unwrap().contains(&"audio"));
+    });
+}
+
+#[test]
+fn pause_cancels_voice_and_resuming_requires_a_new_start() {
+    let f = fixture();
+    let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        send(&mut ws, hello("phone", json!({"method": "pair", "code": code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t": "voiceStart", "id": 1})).await;
+        wait_for_voice(&f.delegate, 1).await;
+        f.host.set_paused(true);
+        recv_kind(&mut ws, "paused").await;
+        f.host.set_paused(false);
+        recv_kind(&mut ws, "paused").await;
+        let session = f.host.connected_devices()[0].session;
+        f.host.voice_update(
+            session,
+            crate::api::VoiceUpdate {
+                request_id: Some(1),
+                state: crate::protocol::VoiceState::Listening,
+                text: Some("cancelled phrase".into()),
+                is_final: true,
+                message: None,
+            },
+        );
+        ws.send(Message::Binary(vec![crate::protocol::binary::AUDIO, 0, 0].into())).await.unwrap();
+        send(&mut ws, json!({"t": "ping", "id": 1})).await;
+        loop {
+            let message = recv(&mut ws).await;
+            assert_ne!(message["t"], "voice", "resume must not revive a cancelled dictation");
+            if message["t"] == "pong" {
+                break;
+            }
+        }
+        assert_eq!(f.delegate.voice.lock().unwrap().as_slice(), ["start", "stop"]);
+        send(&mut ws, json!({"t": "voiceStart", "id": 2})).await;
+        wait_for_voice(&f.delegate, 3).await;
+        ws.send(Message::Binary(vec![crate::protocol::binary::AUDIO, 0, 0].into())).await.unwrap();
+        send(&mut ws, json!({"t": "ping", "id": 2})).await;
+        recv_kind(&mut ws, "pong").await;
+        assert_eq!(f.delegate.voice.lock().unwrap().as_slice(), ["start", "stop", "start", "audio"]);
+    });
+}
+
+#[test]
+fn voice_updates_echo_their_dictation_id() {
+    let f = fixture();
+    let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        send(&mut ws, hello("phone", json!({"method": "pair", "code": code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t": "voiceStart", "id": 42})).await;
+        wait_for_voice(&f.delegate, 1).await;
+        let session = f.host.connected_devices()[0].session;
+        f.host.voice_update(
+            session,
+            crate::api::VoiceUpdate {
+                request_id: Some(42),
+                state: crate::protocol::VoiceState::Stopped,
+                text: None,
+                is_final: false,
+                message: None,
+            },
+        );
+        assert_eq!(recv_kind(&mut ws, "voice").await["id"], 42);
+    });
+}
+
+#[test]
+fn deck_saves_acknowledge_persistence_and_reject_stale_revisions() {
+    let f = fixture();
+    f.rt.block_on(async {
+        let mut phone = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut phone, hello("phone", json!({"method": "pair", "code": code}))).await;
+        let initial = recv_kind(&mut phone, "welcome").await;
+        let mut tablet = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut tablet, hello("tablet", json!({"method": "pair", "code": code}))).await;
+        recv_kind(&mut tablet, "welcome").await;
+        let mut changed = initial["deck"].clone();
+        changed["pages"][0]["name"] = json!("Phone edit");
+        send(&mut phone, json!({"t": "deckSave", "deck": changed, "id": 7, "revision": initial["deckRevision"]})).await;
+        let accepted = recv_kind(&mut phone, "deckSaved").await;
+        assert_eq!(accepted["ok"], true);
+        assert_eq!(accepted["id"], 7);
+        assert_eq!(accepted["revision"], 1);
+        let disk: Value = serde_json::from_str(
+            &std::fs::read_to_string(std::path::Path::new(&f.config.data_dir).join("deck.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(disk["pages"][0]["name"], "Phone edit");
+        recv_kind(&mut tablet, "deck").await;
+        send(&mut tablet, json!({"t": "deckSave", "deck": initial["deck"], "id": 8, "revision": 0})).await;
+        let rejected = recv_kind(&mut tablet, "deckSaved").await;
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["id"], 8);
+        assert_eq!(rejected["revision"], 1);
+        assert!(rejected["message"].as_str().unwrap().contains("another device"));
+        assert_eq!(serde_json::from_str::<Value>(&f.host.deck_json()).unwrap()["pages"][0]["name"], "Phone edit");
+    });
+}
+
+#[test]
+fn failed_deck_writes_are_acknowledged_without_changing_the_deck() {
+    let f = fixture();
+    std::fs::create_dir(std::path::Path::new(&f.config.data_dir).join("deck.json")).unwrap();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("phone", json!({"method": "pair", "code": code}))).await;
+        let initial = recv_kind(&mut ws, "welcome").await;
+        let mut changed = initial["deck"].clone();
+        changed["pages"][0]["name"] = json!("Must not stick");
+        send(&mut ws, json!({"t": "deckSave", "deck": changed, "id": 9, "revision": 0})).await;
+        let rejected = recv_kind(&mut ws, "deckSaved").await;
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["revision"], 0);
+        assert_eq!(serde_json::from_str::<Value>(&f.host.deck_json()).unwrap(), initial["deck"]);
+    });
+}
+
+#[test]
+fn queued_voice_starts_cannot_restart_recording_after_pause_and_resume() {
+    let f = fixture();
+    let (started, entering) = std::sync::mpsc::channel();
+    let (release, ready) = std::sync::mpsc::channel();
+    *f.delegate.voice_gate.lock().unwrap() = Some((started, ready));
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("phone", json!({"method": "pair", "code": code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t": "voiceStart", "id": 1})).await;
+        entering.recv_timeout(Duration::from_secs(2)).unwrap();
+        send(&mut ws, json!({"t": "voiceStart", "id": 2})).await;
+        send(&mut ws, json!({"t": "ping", "id": 1})).await;
+        recv_kind(&mut ws, "pong").await;
+        std::thread::scope(|scope| {
+            let pausing = scope.spawn(|| f.host.set_paused(true));
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !f.host.is_paused() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(f.host.is_paused());
+            release.send(()).unwrap();
+            pausing.join().unwrap();
+        });
+        f.host.set_paused(false);
+        send(&mut ws, json!({"t": "voiceStart", "id": 3})).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !f.delegate.voice_requests.lock().unwrap().contains(&Some(3)) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*f.delegate.voice_requests.lock().unwrap(), [Some(1), Some(3)]);
+    });
+}
+
+#[test]
+fn settings_saves_acknowledge_persistence_and_idempotent_retries() {
+    let f = fixture();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("settings-acks", json!({"method":"pair", "code":code}))).await;
+        assert_eq!(recv(&mut ws).await["settingsSaveAck"], true);
+        for id in [41, 42] {
+            send(&mut ws, json!({"t":"settingsSave", "id":id, "settings":{"theme":"dark"}, "updatedAt":100})).await;
+            let result = recv_kind(&mut ws, "settingsSaved").await;
+            assert_eq!(result["id"], id);
+            assert_eq!(result["ok"], true);
+            assert_eq!(result["updatedAt"], 100);
+        }
+        send(&mut ws, json!({"t":"settingsSave", "id":43, "settings":"invalid", "updatedAt":101})).await;
+        let result = recv_kind(&mut ws, "settingsSaved").await;
+        assert_eq!(result["id"], 43);
+        assert_eq!(result["ok"], false);
+        send(&mut ws, json!({"t":"settingsCopy", "from":"settings-acks"})).await;
+        assert_eq!(recv_kind(&mut ws, "settings").await["settings"]["theme"], "dark");
+        send(&mut ws, json!({"t":"settingsSave", "id":44, "settings":{}, "updatedAt":"invalid"})).await;
+        let result = recv_kind(&mut ws, "settingsSaved").await;
+        assert_eq!(result["id"], 44);
+        assert_eq!(result["ok"], false);
+    });
+}
+
+#[test]
+fn a_failed_settings_write_can_be_retried_with_the_same_timestamp() {
+    let f = fixture();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("settings-retry", json!({"method":"pair", "code":code}))).await;
+        assert_eq!(recv(&mut ws).await["t"], "welcome");
+        let directory = std::path::Path::new(&f.config.data_dir).join("settings");
+        std::fs::write(&directory, b"not a directory").unwrap();
+        send(&mut ws, json!({"t":"settingsSave", "id":1, "settings":{"theme":"dark"}, "updatedAt":100})).await;
+        assert_eq!(recv_kind(&mut ws, "settingsSaved").await["ok"], false);
+        std::fs::remove_file(&directory).unwrap();
+        send(&mut ws, json!({"t":"settingsSave", "id":2, "settings":{"theme":"dark"}, "updatedAt":100})).await;
+        let result = recv_kind(&mut ws, "settingsSaved").await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["updatedAt"], 100);
+    });
+}
+
+#[test]
+fn speech_start_failures_preserve_the_specific_windows_cause() {
+    let f = fixture();
+    *f.delegate.speech_problem.lock().unwrap() =
+        Some("Windows could not open the speech language. Error 0x80131515.".into());
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("speech-problem", json!({"method":"pair", "code":code}))).await;
+        assert_eq!(recv(&mut ws).await["t"], "welcome");
+        send(&mut ws, json!({"t":"voiceStart", "id":17})).await;
+        let result = recv_kind(&mut ws, "voice").await;
+        assert_eq!(result["id"], 17);
+        assert_eq!(result["state"], "unavailable");
+        assert_eq!(result["message"], "Windows could not open the speech language. Error 0x80131515.");
+    });
+}
+
+#[test]
+fn an_app_that_cannot_activate_stops_the_rest_of_the_sequence() {
+    let f = fixture();
+    f.delegate.app_failure.store(true, std::sync::atomic::Ordering::SeqCst);
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("app-failure", json!({"method":"pair", "code":code}))).await;
+        assert_eq!(recv(&mut ws).await["t"], "welcome");
+        send(
+            &mut ws,
+            json!({"t":"action", "id":21, "action":{"kind":"sequence", "steps":[
+                {"kind":"app", "id":"missing-app", "op":"open"},
+                {"kind":"text", "text":"must not be typed", "enter":true}
+            ]}}),
+        )
+        .await;
+        assert_eq!(recv_kind(&mut ws, "actionResult").await["ok"], false);
+        assert!(f.recorder.0.lock().unwrap().is_empty(), "Failed activation must not type into the old foreground app");
+    });
+}
+
+#[test]
+fn pause_releases_held_input_before_a_slow_speech_start_finishes() {
+    let f = fixture();
+    let (started, entering) = std::sync::mpsc::channel();
+    let (release, ready) = std::sync::mpsc::channel();
+    *f.delegate.voice_gate.lock().unwrap() = Some((started, ready));
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("pause-held-input", json!({"method":"pair", "code":code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t":"key", "code":KEY_C, "down":true, "repeat":false})).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while f.recorder.0.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+        send(&mut ws, json!({"t":"voiceStart", "id":1})).await;
+        entering.recv_timeout(Duration::from_secs(2)).unwrap();
+        std::thread::scope(|scope| {
+            let pausing = scope.spawn(|| f.host.set_paused(true));
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            let released = loop {
+                if f.recorder
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(event, Synth::Key { code: KEY_C, down: false, .. }))
+                {
+                    break true;
+                }
+                if std::time::Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            };
+            release.send(()).unwrap();
+            pausing.join().unwrap();
+            assert!(released, "Held input cannot wait for speech startup to finish");
+        });
+    });
+}
+
+#[test]
+fn pausing_cancels_finishing_recordings_after_the_newer_one_has_completed() {
+    let f = fixture();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("finishing-voice", json!({"method":"pair", "code":code}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        send(&mut ws, json!({"t":"voiceStart", "id":1})).await;
+        send(&mut ws, json!({"t":"voiceStop", "id":1, "cancel":false})).await;
+        send(&mut ws, json!({"t":"voiceStart", "id":2})).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !f.delegate.voice_requests.lock().unwrap().contains(&Some(2)) {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let session = f.host.connected_devices()[0].session;
+        f.host.voice_update(
+            session,
+            crate::api::VoiceUpdate {
+                request_id: Some(2),
+                state: crate::protocol::VoiceState::Stopped,
+                text: None,
+                is_final: false,
+                message: None,
+            },
+        );
+        let stopped_before = f.delegate.voice.lock().unwrap().iter().filter(|op| **op == "stop").count();
+        f.host.set_paused(true);
+        let stopped_after = f.delegate.voice.lock().unwrap().iter().filter(|op| **op == "stop").count();
+        assert_eq!(stopped_after, stopped_before + 1, "The earlier, still-finishing recognizer must also be cancelled");
+    });
 }

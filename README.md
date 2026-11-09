@@ -123,7 +123,7 @@ Build the controls you need for games, presentations and editing. Hold several k
 <img src="docs/media/deck.webp" width="100%" alt="WinPalm shortcut Deck with illustrated Windows actions" />
 
 #### Shortcut Deck
-A button grid for shortcuts, snippets, apps, websites, clicks and multi-step actions. Resize buttons, reorder pages, and import or export from the PC. PowerShell actions are available when you enable them.
+A button grid for shortcuts, snippets, apps, websites, clicks and multi-step actions. Resize buttons, reorder pages, undo or redo confirmed edits, and import or export from the PC. Failed saves keep your draft, and conflicting saves ask you to review newer changes. Sequences wait for opened apps to become active. PowerShell actions are available when you enable them.
 
 </td>
 </tr>
@@ -150,6 +150,8 @@ Speak into your phone and let a compatible installed Windows recognizer type on 
 <sub>Animated previews from the launch film: WinPalm phone UI with illustrated PC responses, without live Windows footage.</sub>
 
 Pair multiple phones and tablets. Settings, custom keyboards and gestures are backed up on the PC for each device. **Copy settings from another device** lets you select individual settings sections and keyboards. Deck pages are shared across paired devices.
+
+On the phone, **Settings → Back up or restore this device** exports your settings and custom keyboards to a JSON file. Review a backup before restoring it. Pairing tokens are excluded, and restoring preserves the current device's name and pairing. Shared Deck files are exported separately from the PC's Deck settings. If the PC cannot save a settings backup, WinPalm retries and offers **Retry saving to the PC** in the phone's Settings.
 
 For slides, use large arrow keys. For games, make a WASD layout. For movie night, keep playback and volume within reach. For editing and streaming, put your repeated shortcuts on a Deck page. Explore the [guides](https://winpalm.rsapplication.com/guides/) for more ideas.
 
@@ -217,7 +219,7 @@ Future releases follow CmdPalm's routine: update the changelog, run **`bun scrip
 
 Built by **[RS Application](https://rsapplication.com)**. WinPalm adapts CmdPalm 0.7.0's Rust engine and Vue phone client for Windows. See [NOTICE](NOTICE) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licenses.
 
-Licensed under **[AGPL-3.0-only](LICENSE)**.
+Licensed under **[AGPL-3.0-only](LICENSE)**. Current development also incorporates CmdPalm 0.8.0's shared Deck, device backup and dictation improvements.
 
 <div align="center">
 <br />

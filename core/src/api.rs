@@ -140,7 +140,9 @@ pub trait HostDelegate: Send + Sync {
     fn list_apps(&self) -> Vec<AppEntry>;
     /// PNG data for an app icon at `size` pixels.
     fn app_icon(&self, id: String, size: u32) -> Option<Vec<u8>>;
-    fn app_action(&self, id: String, op: AppOp) -> bool;
+    /// Opening an app must wait for its window to activate, and stop waiting
+    /// when control for the requesting session is revoked.
+    fn app_action(&self, id: String, op: AppOp, session: u64) -> bool;
     fn open_url(&self, url: String) -> bool;
     fn native(&self, command: NativeCommand) -> bool;
     fn automation_command(&self, name: String) -> Option<String>;
@@ -152,7 +154,9 @@ pub trait HostDelegate: Send + Sync {
     fn begin_paste(&self, text: String) -> bool;
     /// Restore the clipboard saved by [`HostDelegate::begin_paste`].
     fn end_paste(&self);
-    fn voice_start(&self, session: u64, locale: Option<String>) -> bool;
+    /// Return startup errors directly; synchronous voice-update callbacks
+    /// here would reenter the voice lock before the recording is registered.
+    fn voice_start(&self, session: u64, locale: Option<String>, request_id: Option<u32>) -> Result<(), String>;
     /// 16 kHz mono signed 16-bit little-endian PCM.
     fn voice_audio(&self, session: u64, pcm: Vec<u8>);
     fn voice_stop(&self, session: u64, cancel: bool);
@@ -161,6 +165,7 @@ pub trait HostDelegate: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceUpdate {
+    pub request_id: Option<u32>,
     pub state: VoiceState,
     pub text: Option<String>,
     pub is_final: bool,

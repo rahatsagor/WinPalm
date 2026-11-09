@@ -66,10 +66,73 @@ sealed class Tests
       Sync("speech stream provides live length and position to System.Speech", SpeechStreamContract);
       await Async("speech reads fill across phone packets until end of input", SpeechPacketReads);
       await Async("stopping speech releases a blocked reader", SpeechStopReleasesRead);
+      Sync("lock and sleep must each resume before control returns", OverlappingPauses);
+      Sync("automatic pauses preserve an existing manual pause", ManualPauseSurvives);
+      Sync("duplicate and unrelated resume events never enable control", UnmatchedResumes);
+      Sync("app activation waits for the foreground confirmation", ActivationCompletion);
+      Sync("app activation has a bounded timeout", ActivationTimeout);
+      Sync("cancelled app activation stops waiting and cannot succeed", ActivationCancellation);
     }
     finally { try { Directory.Delete(root, true); } catch { } }
     Console.WriteLine($"{passed} passed, {failed} failed");
     if (failed != 0) Environment.ExitCode = 1;
+  }
+
+  private void OverlappingPauses()
+  {
+    foreach (var first in new[] { ControlPauseReason.SessionLocked, ControlPauseReason.Sleep, ControlPauseReason.SessionDisconnected })
+    foreach (var second in new[] { ControlPauseReason.SessionLocked, ControlPauseReason.Sleep, ControlPauseReason.SessionDisconnected }.Where(value => value != first))
+    {
+      var state = new ControlPauseState();
+      True(state.Suspend(first, false)); True(state.Suspend(second, true));
+      True(state.Resume(second) is null); True(state.Active);
+      Equal(false, state.Resume(first)); False(state.Active);
+    }
+  }
+
+  private void ManualPauseSurvives()
+  {
+    var state = new ControlPauseState();
+    True(state.Suspend(ControlPauseReason.Sleep, true));
+    True(state.Suspend(ControlPauseReason.SessionLocked, true));
+    True(state.Resume(ControlPauseReason.Sleep) is null);
+    Equal(true, state.Resume(ControlPauseReason.SessionLocked));
+  }
+
+  private void UnmatchedResumes()
+  {
+    var state = new ControlPauseState();
+    True(state.Resume(ControlPauseReason.Sleep) is null);
+    True(state.Suspend(ControlPauseReason.SessionLocked, false));
+    False(state.Suspend(ControlPauseReason.SessionLocked, true));
+    True(state.Resume(ControlPauseReason.Sleep) is null); True(state.Active);
+    Equal(false, state.Resume(ControlPauseReason.SessionLocked));
+    True(state.Resume(ControlPauseReason.SessionLocked) is null);
+  }
+
+  private void ActivationCompletion()
+  {
+    var calls = 0;
+    True(ActivationWait.Run(() => ++calls == 3, () => false, TimeSpan.FromSeconds(1)));
+    Equal(3, calls);
+  }
+
+  private void ActivationTimeout()
+  {
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    False(ActivationWait.Run(() => false, () => false, TimeSpan.FromMilliseconds(30)));
+    True(watch.Elapsed < TimeSpan.FromSeconds(1));
+  }
+
+  private void ActivationCancellation()
+  {
+    var calls = 0;
+    False(ActivationWait.Run(() => { calls++; return true; }, () => true));
+    Equal(0, calls);
+    False(ActivationWait.Run(() => { calls++; return false; }, () => calls != 0));
+    Equal(1, calls);
+    var cancelled = false;
+    False(ActivationWait.Run(() => { cancelled = true; return true; }, () => cancelled));
   }
 
   private void ReleaseSelection()

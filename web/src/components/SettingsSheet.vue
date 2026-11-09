@@ -11,6 +11,7 @@ import { hapticsSupported, switchOnly } from '@/lib/haptics'
 import type { Action } from '@/lib/protocol'
 import { lazy } from '@/lib/reload'
 import { DECK_SIZE, resetSettings, settings, type GestureMap, type GestureSlot } from '@/lib/settings'
+import { retrySettingsBackup, settingsBackup } from '@/lib/settingsSync'
 import { wakeLockSupported } from '@/lib/wakeLock'
 import ActionEditor from './ActionEditor.vue'
 import RangeRow from './RangeRow.vue'
@@ -19,6 +20,7 @@ import Sheet from './Sheet.vue'
 import Toggle from './Toggle.vue'
 
 const CopySettingsSheet = lazy(() => import('./CopySettingsSheet.vue'))
+const BackupSheet = lazy(() => import('./BackupSheet.vue'))
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -26,6 +28,7 @@ const secure = computed(() => location.protocol === 'https:')
 const confirmForget = ref(false)
 const confirmReset = ref(false)
 const showCopy = ref(false)
+const showBackup = ref(false)
 
 const SLOTS: { slot: GestureSlot; label: string }[] = [
   { slot: 'up', label: 'Swipe up' },
@@ -317,6 +320,13 @@ const times = (v: number) => `${v.toFixed(1)}×`
 
     <section class="mt-5 flex flex-col gap-2">
       <button type="button" class="action" @click="showCopy = true"><Copy :size="17" /> Copy settings from another device</button>
+      <button type="button" class="action" @click="showBackup = true"><Download :size="17" /> Back up or restore this device</button>
+      <div v-if="settingsBackup.error" class="rounded-2xl bg-surface-2 p-4 text-[13px]" role="alert">
+        <p>Your setup is still available on this device. {{ settingsBackup.error }}</p>
+        <button type="button" class="action mt-2" :disabled="settingsBackup.saving || state.status !== 'connected'" @click="retrySettingsBackup">
+          {{ settingsBackup.saving ? 'Saving…' : 'Retry saving to the PC' }}
+        </button>
+      </div>
       <button type="button" class="action" @click="((confirmReset = !confirmReset), (confirmForget = false))">
         <RotateCcw :size="17" /> Reset settings on this device
       </button>
@@ -336,6 +346,7 @@ const times = (v: number) => `${v.toFixed(1)}×`
     </p>
 
     <CopySettingsSheet v-if="showCopy" @close="showCopy = false" />
+    <BackupSheet v-if="showBackup" @close="showBackup = false" />
 
     <Sheet v-if="gesture" :title="gesture.label" @close="gesture = null">
       <template #actions>

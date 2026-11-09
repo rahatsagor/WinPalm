@@ -336,7 +336,6 @@ pub enum Input {
 pub struct Interrupts {
     paused: AtomicBool,
     shell_epoch: AtomicU64,
-    voice_epoch: AtomicU64,
     ended: Mutex<HashSet<SessionId>>,
 }
 
@@ -349,18 +348,7 @@ impl Interrupts {
         self.shell_epoch.load(Ordering::SeqCst)
     }
 
-    pub fn cancel_voice(&self) {
-        self.voice_epoch.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn voice_epoch(&self) -> u64 {
-        self.voice_epoch.load(Ordering::SeqCst)
-    }
-
     pub fn set_paused(&self, paused: bool) {
-        if paused {
-            self.cancel_voice();
-        }
         self.paused.store(paused, Ordering::SeqCst);
     }
 

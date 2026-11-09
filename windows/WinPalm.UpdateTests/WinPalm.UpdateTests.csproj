@@ -10,5 +10,7 @@
     <Compile Include="../WinPalm/Services/ReleaseUpdates.cs" Link="Services/ReleaseUpdates.cs" />
     <Compile Include="../WinPalm/Services/UpdatePackage.cs" Link="Services/UpdatePackage.cs" />
     <Compile Include="../WinPalm/Services/PcmAudioStream.cs" Link="Services/PcmAudioStream.cs" />
+    <Compile Include="../WinPalm/Services/ActivationWait.cs" Link="Services/ActivationWait.cs" />
+    <Compile Include="../WinPalm/Services/ControlPauseState.cs" Link="Services/ControlPauseState.cs" />
   </ItemGroup>
 </Project>

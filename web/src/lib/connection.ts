@@ -54,6 +54,8 @@ export const state = reactive({
   hostVersion: '',
   features: { voice: false, shell: false, secure: false, permission: true } as Features,
   deck: null as Deck | null,
+  deckRevision: undefined as number | undefined,
+  settingsSaveAck: false,
   volume: null as VolumeState | null,
   paused: false,
   /** Caps Lock on the PC, so the keyboard can show it like the key's light. */
@@ -292,6 +294,8 @@ function handle(message: ServerMessage) {
       state.hostVersion = message.host.version
       state.features = message.features
       state.deck = message.deck
+      state.deckRevision = message.deckRevision
+      state.settingsSaveAck = message.settingsSaveAck === true
       state.volume = message.volume ?? null
       state.paused = message.paused
       state.capsLock = message.capsLock ?? false
@@ -325,6 +329,7 @@ function handle(message: ServerMessage) {
       break
     case 'deck':
       state.deck = message.deck
+      state.deckRevision = message.revision
       break
     case 'layout':
       labels.value = new LabelMap(message.layout)

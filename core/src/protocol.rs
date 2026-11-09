@@ -303,6 +303,10 @@ pub enum ClientMessage {
     },
     DeckSave {
         deck: Deck,
+        #[serde(default)]
+        id: Option<u32>,
+        #[serde(default)]
+        revision: Option<u64>,
     },
     Volume {
         #[serde(default)]
@@ -317,15 +321,21 @@ pub enum ClientMessage {
     VoiceStart {
         #[serde(default)]
         locale: Option<String>,
+        #[serde(default)]
+        id: Option<u32>,
     },
     VoiceStop {
         #[serde(default)]
         cancel: bool,
+        #[serde(default)]
+        id: Option<u32>,
     },
     /// This device's own phone settings, to keep on the PC.
     SettingsSave {
         settings: serde_json::Value,
         updated_at: u64,
+        #[serde(default)]
+        id: Option<u32>,
     },
     /// Other paired devices whose settings could be copied.
     SettingsList,
@@ -447,6 +457,7 @@ pub enum ServerMessage {
         token: Option<String>,
         features: Features,
         deck: Deck,
+        deck_revision: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         layout: Option<KeyboardLayout>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -456,6 +467,7 @@ pub enum ServerMessage {
         /// The settings this device saved on the PC earlier.
         #[serde(skip_serializing_if = "Option::is_none")]
         settings: Option<SavedSettings>,
+        settings_save_ack: bool,
     },
     Pending,
     Denied {
@@ -472,6 +484,14 @@ pub enum ServerMessage {
     AppsChanged,
     Deck {
         deck: Deck,
+        revision: u64,
+    },
+    DeckSaved {
+        id: u32,
+        ok: bool,
+        revision: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     Layout {
         layout: KeyboardLayout,
@@ -497,6 +517,8 @@ pub enum ServerMessage {
         text: String,
     },
     Voice {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
         state: VoiceState,
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
@@ -509,6 +531,13 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
         ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    SettingsSaved {
+        id: u32,
+        ok: bool,
+        updated_at: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
@@ -585,6 +614,7 @@ mod tests {
         );
 
         let json = serde_json::to_string(&ServerMessage::Voice {
+            id: None,
             state: VoiceState::Listening,
             text: Some("hi".into()),
             is_final: false,

@@ -44,7 +44,7 @@ impl HostDelegate for Delegate {
     fn app_icon(&self, _id: String, _size: u32) -> Option<Vec<u8>> {
         None
     }
-    fn app_action(&self, id: String, op: AppOp) -> bool {
+    fn app_action(&self, id: String, op: AppOp, _session: u64) -> bool {
         println!("app: {op:?} {id}");
         true
     }
@@ -83,8 +83,8 @@ impl HostDelegate for Delegate {
         true
     }
     fn end_paste(&self) {}
-    fn voice_start(&self, _session: u64, _locale: Option<String>) -> bool {
-        false
+    fn voice_start(&self, _session: u64, _locale: Option<String>, _request_id: Option<u32>) -> Result<(), String> {
+        Err("Speech recognition is unavailable in the development host.".into())
     }
     fn voice_audio(&self, _session: u64, _pcm: Vec<u8>) {}
     fn voice_stop(&self, _session: u64, _cancel: bool) {}

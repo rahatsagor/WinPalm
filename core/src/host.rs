@@ -1,4 +1,4 @@
-//! The [`CoreHost`] object Swift owns, and the state shared by server tasks.
+//! The [`CoreHost`] object the Windows host owns, and state shared by server tasks.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -59,6 +59,7 @@ pub(crate) struct State {
     pub trust: TrustStore,
     pub pairing: Pairing,
     pub deck: Deck,
+    pub deck_revision: u64,
     pub layout: Option<KeyboardLayout>,
     pub volume: Option<VolumeState>,
     pub paused: bool,
@@ -68,6 +69,13 @@ pub(crate) struct State {
 }
 
 pub(crate) type IconCache = HashMap<(String, u32), Arc<Vec<u8>>>;
+
+/// Voice operations share this lock so revocation cannot race a queued start.
+#[derive(Default)]
+pub(crate) struct Voices {
+    pub active: HashMap<SessionId, Option<u32>>,
+    pub accepted: HashMap<SessionId, Vec<Option<u32>>>,
+}
 
 pub(crate) struct Shared {
     pub config: RwLock<HostConfig>,
@@ -86,6 +94,8 @@ pub(crate) struct Shared {
     /// Open connections per address; see `server::ConnectionSlot`.
     pub connections: Mutex<HashMap<IpAddr, usize>>,
     pub settings: Mutex<DeviceSettings>,
+    pub voices: Mutex<Voices>,
+    pub voice_epoch: AtomicU64,
     state: Mutex<State>,
     pub tls: RwLock<Option<Arc<tls::Identity>>>,
     pub port: AtomicU16,
@@ -121,10 +131,13 @@ impl Shared {
             trust_written: Mutex::new(0),
             connections: Mutex::new(HashMap::new()),
             settings: Mutex::new(settings),
+            voices: Mutex::new(Voices::default()),
+            voice_epoch: AtomicU64::new(0),
             state: Mutex::new(State {
                 trust,
                 pairing: Pairing::new(Instant::now()),
                 deck,
+                deck_revision: 0,
                 layout: None,
                 volume: None,
                 paused: false,
@@ -209,6 +222,36 @@ impl Shared {
 
     pub fn device_settings(&self) -> MutexGuard<'_, DeviceSettings> {
         self.settings.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn voices(&self) -> MutexGuard<'_, Voices> {
+        self.voices.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn cancel_voices(&self) {
+        self.voice_epoch.fetch_add(1, Ordering::SeqCst);
+        let mut voices = self.voices();
+        // A stopped recording may still be delivering its final phrase
+        // after a newer one completed. Cancel those native resources too.
+        let accepted = std::mem::take(&mut voices.accepted);
+        for id in accepted.keys().filter(|id| !voices.active.contains_key(id)) {
+            self.delegate.voice_stop(*id, true);
+        }
+        for (id, request_id) in voices.active.drain() {
+            self.delegate.voice_stop(id, true);
+            // Older open clients react to voice replies, but do not yet
+            // release their microphone on a paused/features message.
+            self.send_to(
+                id,
+                ServerMessage::Voice {
+                    id: request_id,
+                    state: crate::protocol::VoiceState::Unavailable,
+                    text: None,
+                    is_final: false,
+                    message: Some("Dictation was stopped on the PC.".into()),
+                },
+            );
+        }
     }
 
     /// Whether work started for `session` should stop: input is paused or the
@@ -601,6 +644,7 @@ impl CoreHost {
         };
         self.close_sessions(STOPPED_SHARING, true);
         let _ = running.shutdown.send(true);
+        self.shared.cancel_voices();
         // Give sessions a moment to send their goodbye frames.
         std::thread::sleep(Duration::from_millis(100));
         running.runtime.shutdown_timeout(Duration::from_secs(1));
@@ -612,6 +656,9 @@ impl CoreHost {
             self.shared.engine(Command::EndSession(id));
             self.shared.delegate.voice_stop(id, true);
         }
+        // A delegate start may have been in flight during runtime shutdown.
+        // With sessions removed, cancel its registration under the voice lock.
+        self.shared.cancel_voices();
         let approvals: Vec<u64> = self.shared.state().approvals.drain().map(|(id, _)| id).collect();
         for id in approvals {
             self.shared.emit(HostEvent::ApprovalEnded { id });
@@ -626,26 +673,13 @@ impl CoreHost {
 
     pub fn update_config(&self, config: HostConfig) {
         let previous = self.shared.config();
-        if previous.voice_available && !config.voice_available {
-            self.shared.interrupts.cancel_voice();
-            let ids: Vec<_> = self.shared.state().sessions.keys().copied().collect();
-            for id in ids {
-                self.shared.delegate.voice_stop(id, true);
-                self.shared.send_to(
-                    id,
-                    ServerMessage::Voice {
-                        state: crate::protocol::VoiceState::Unavailable,
-                        text: None,
-                        is_final: false,
-                        message: Some("Voice typing was disabled on the PC.".into()),
-                    },
-                );
-            }
-        }
+        *self.shared.config.write().unwrap_or_else(|p| p.into_inner()) = config.clone();
         if previous.allow_shell && !config.allow_shell {
             self.shared.interrupts.cancel_shell();
         }
-        *self.shared.config.write().unwrap_or_else(|p| p.into_inner()) = config.clone();
+        if previous.voice_available && !config.voice_available {
+            self.shared.cancel_voices();
+        }
         if previous.allow_shell != config.allow_shell || previous.voice_available != config.voice_available {
             let permission = (self.shared.permission)();
             let sessions: Vec<_> =
@@ -798,23 +832,13 @@ impl CoreHost {
             state.paused = paused;
         }
         self.shared.interrupts.set_paused(paused);
+        // Release held input and notify the phone before waiting for a slow
+        // native recognizer startup to leave the voice lock.
         self.shared.engine(Command::SetPaused(paused));
-        if paused {
-            let sessions: Vec<_> = self.shared.state().sessions.keys().copied().collect();
-            for id in sessions {
-                self.shared.delegate.voice_stop(id, true);
-                self.shared.send_to(
-                    id,
-                    ServerMessage::Voice {
-                        state: crate::protocol::VoiceState::Stopped,
-                        text: None,
-                        is_final: false,
-                        message: None,
-                    },
-                );
-            }
-        }
         self.shared.broadcast(ServerMessage::Paused { paused });
+        if paused {
+            self.shared.cancel_voices();
+        }
     }
 
     pub fn is_paused(&self) -> bool {
@@ -874,14 +898,33 @@ impl CoreHost {
     }
 
     pub fn voice_update(&self, session: u64, update: VoiceUpdate) {
-        if update.state == crate::protocol::VoiceState::Listening
-            && (self.shared.should_stop(session) || !self.shared.config().voice_available)
-        {
+        // Serialize delivery with revocation, including a rapid pause/resume.
+        let mut voices = self.shared.voices();
+        let Some(accepted) = voices.accepted.get_mut(&session) else { return };
+        if !accepted.contains(&update.request_id) {
+            return;
+        }
+        if matches!(
+            update.state,
+            crate::protocol::VoiceState::Stopped
+                | crate::protocol::VoiceState::Unavailable
+                | crate::protocol::VoiceState::Error
+        ) {
+            accepted.retain(|id| *id != update.request_id);
+            if accepted.is_empty() {
+                voices.accepted.remove(&session);
+            }
+            if voices.active.get(&session) == Some(&update.request_id) {
+                voices.active.remove(&session);
+            }
+        }
+        if self.shared.should_stop(session) || !self.shared.config().voice_available {
             return;
         }
         self.shared.send_to(
             session,
             ServerMessage::Voice {
+                id: update.request_id,
                 state: update.state,
                 text: update.text,
                 is_final: update.is_final,

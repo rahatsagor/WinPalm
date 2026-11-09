@@ -18,9 +18,11 @@ internal sealed class HostContext : ApplicationContext
   private readonly Dictionary<ulong, ApprovalWindow> approvals = [];
   /// Lock and sleep arrive on the SystemEvents thread, unlock on the UI thread.
   private readonly object lockGate = new();
+  private readonly ControlPauseState automaticPause = new();
+  private bool AutomaticallyPaused { get { lock (lockGate) return automaticPause.Active; } }
   private readonly ToolStripMenuItem pauseItem;
   private readonly ToolStripMenuItem updateItem;
-  private bool busy, quitting, locked, wasPaused;
+  private bool busy, quitting;
   private nint lastLayout, lastForeground;
   private int ticks, checkingNetwork;
   internal HostContext(Preferences preferences, bool minimized)
@@ -96,7 +98,13 @@ internal sealed class HostContext : ApplicationContext
   internal void Restart() { Stop(); Start(); }
   internal void TogglePause()
   {
-    var state = CoreBridge.Call(new { op = "status" }); CoreBridge.TryCall(new { op = "pause", paused = !state.GetProperty("paused").GetBoolean() }); RefreshSoon();
+    lock (lockGate)
+    {
+      if (quitting || automaticPause.Active) return;
+      var state = CoreBridge.Call(new { op = "status" });
+      CoreBridge.TryCall(new { op = "pause", paused = !state.GetProperty("paused").GetBoolean() });
+    }
+    RefreshSoon();
   }
   internal void RefreshSoon()
   {
@@ -142,7 +150,7 @@ internal sealed class HostContext : ApplicationContext
     {
       case "approvalRequested":
         var request = value.GetProperty("request"); var id = request.GetProperty("id").GetUInt64();
-        if (locked) { CoreBridge.TryCall(new { op = "approve", id, allow = false }); break; }
+        if (AutomaticallyPaused) { CoreBridge.TryCall(new { op = "approve", id, allow = false }); break; }
         if (approvals.ContainsKey(id)) break;
         var approval = new ApprovalWindow(request); approvals[id] = approval; approval.Show();
         tray.ShowBalloonTip(8000, "WinPalm pairing request", "A nearby device is asking to control this PC. Review its name and address in WinPalm.", ToolTipIcon.Info); break;
@@ -156,30 +164,39 @@ internal sealed class HostContext : ApplicationContext
   }
   private void SessionChanged(object sender, SessionSwitchEventArgs args)
   {
-    if (args.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.RemoteDisconnect or SessionSwitchReason.SessionLogoff)
-      OnWindowThread(SuspendControl);
-    else if (args.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.RemoteConnect)
-      OnWindowThread(ResumeControl);
+    if (args.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.SessionLogoff)
+      SuspendControl(ControlPauseReason.SessionLocked);
+    else if (args.Reason == SessionSwitchReason.RemoteDisconnect)
+      SuspendControl(ControlPauseReason.SessionDisconnected);
+    else if (args.Reason == SessionSwitchReason.SessionUnlock)
+      OnWindowThread(() => ResumeControl(ControlPauseReason.SessionLocked));
+    else if (args.Reason == SessionSwitchReason.RemoteConnect)
+      OnWindowThread(() => ResumeControl(ControlPauseReason.SessionDisconnected));
   }
   private void PowerChanged(object sender, PowerModeChangedEventArgs args)
   {
     // Pause right away on suspend; a queued call might not run before sleep.
-    if (args.Mode == PowerModes.Suspend) SuspendControl();
-    else if (args.Mode == PowerModes.Resume) OnWindowThread(ResumeControl);
+    if (args.Mode == PowerModes.Suspend) SuspendControl(ControlPauseReason.Sleep);
+    else if (args.Mode == PowerModes.Resume) OnWindowThread(() => ResumeControl(ControlPauseReason.Sleep));
   }
-  private void SuspendControl()
+  private void SuspendControl(ControlPauseReason reason)
   {
     lock (lockGate)
     {
-      if (quitting || locked) return; locked = true;
-      try { wasPaused = CoreBridge.Call(new { op = "status" }).GetProperty("paused").GetBoolean(); }
-      catch (InvalidOperationException error) { Diagnostics.Record(error); wasPaused = false; }
-      CoreBridge.TryCall(new { op = "pause", paused = true });
+      if (quitting) return;
+      var paused = true; // A failed status read must never resume control later.
+      try { paused = CoreBridge.Call(new { op = "status" }).GetProperty("paused").GetBoolean(); }
+      catch (InvalidOperationException error) { Diagnostics.Record(error); }
+      if (automaticPause.Suspend(reason, paused)) CoreBridge.TryCall(new { op = "pause", paused = true });
     }
   }
-  private void ResumeControl()
+  private void ResumeControl(ControlPauseReason reason)
   {
-    lock (lockGate) { if (quitting || !locked) return; locked = false; if (!wasPaused) CoreBridge.TryCall(new { op = "pause", paused = false }); }
+    lock (lockGate)
+    {
+      if (quitting) return;
+      if (automaticPause.Resume(reason) is { } paused) CoreBridge.TryCall(new { op = "pause", paused });
+    }
     RefreshSoon();
   }
   protected override void ExitThreadCore()

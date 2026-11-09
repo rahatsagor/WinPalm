@@ -101,6 +101,33 @@ let macAt = 0
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let changedAt = 0
 let warnedTooLarge = false
+const RETRY_DELAYS = [2000, 5000, 15_000]
+let saveId = 0
+let pendingSave: { id: number; updatedAt: number; timer: ReturnType<typeof setTimeout> } | null = null
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+let retryAttempts = 0
+export const settingsBackup = reactive({ saving: false, error: '' })
+
+function clearPendingSave() {
+  if (pendingSave) clearTimeout(pendingSave.timer)
+  pendingSave = null
+  settingsBackup.saving = false
+}
+
+function failedSave(message: string) {
+  clearPendingSave()
+  settingsBackup.error = message
+  clearTimeout(retryTimer)
+  const delay = RETRY_DELAYS[retryAttempts++]
+  if (delay !== undefined && state.status === 'connected') retryTimer = setTimeout(push, delay)
+}
+
+export function retrySettingsBackup() {
+  clearTimeout(retryTimer)
+  retryAttempts = 0
+  commit()
+  push()
+}
 
 function loadMeta(): Meta {
   try {
@@ -135,7 +162,7 @@ function commit() {
 /** Send this device's settings if the PC's copy is older. */
 function push() {
   // The PC keeps settings only for remembered devices.
-  if (meta.updatedAt <= macAt || !token.get() || state.status !== 'connected') return
+  if (pendingSave || meta.updatedAt <= macAt || !token.get() || state.status !== 'connected') return
   const payload = buildPayload()
   const size = new TextEncoder().encode(JSON.stringify(payload)).length
   if (size > MAX_BYTES) {
@@ -143,10 +170,21 @@ function push() {
     warnedTooLarge = true
     return
   }
-  if (send({ t: 'settingsSave', settings: payload, updatedAt: meta.updatedAt })) macAt = meta.updatedAt
+  if (!state.settingsSaveAck) {
+    // Older PCs have no persistence acknowledgement; keep compatibility.
+    if (send({ t: 'settingsSave', settings: payload, updatedAt: meta.updatedAt })) macAt = meta.updatedAt
+    return
+  }
+  clearTimeout(retryTimer)
+  const id = ++saveId
+  pendingSave = { id, updatedAt: meta.updatedAt, timer: setTimeout(() => failedSave('The PC hasn’t confirmed saving your setup. Try again.'), REPLY_TIMEOUT_MS) }
+  settingsBackup.saving = true
+  if (!send({ t: 'settingsSave', id, settings: payload, updatedAt: meta.updatedAt })) failedSave('Reconnect to the PC to save your setup there.')
 }
 
 function schedule() {
+  clearTimeout(retryTimer)
+  retryAttempts = 0
   changedAt = Date.now()
   clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
@@ -155,7 +193,7 @@ function schedule() {
   }, SAVE_DELAY_MS)
 }
 
-function validAction(raw: unknown): boolean {
+export function validAction(raw: unknown): boolean {
   if (!isRecord(raw) || typeof raw.kind !== 'string' || !KINDS.has(raw.kind)) return false
   try {
     return !actionProblem(raw as unknown as Action)
@@ -188,6 +226,10 @@ function parseSaved(raw: unknown): SavedSettings | null {
 }
 
 function welcomed(saved: SavedSettings | null) {
+  clearPendingSave()
+  clearTimeout(retryTimer)
+  retryAttempts = 0
+  settingsBackup.error = ''
   commit()
   macAt = saved?.updatedAt ?? 0
   if (saved && saved.updatedAt > meta.updatedAt) {
@@ -319,12 +361,22 @@ export function copyFrom(preview: CopyPreview, selection: CopySelection): boolea
     notify('This selection is too large to back up on the PC. Select fewer keyboards.', 'warning', 'settings')
     return false
   }
+  if (!replaceSynced(payload)) return false
+  notify(`Copied your selection from ${preview.device.name}.`, 'info', 'settings')
+  return true
+}
+
+/** Install a validated setup atomically and make it newer than its PC copy. */
+export function replaceSynced(payload: SyncedSettings): boolean {
+  if (new TextEncoder().encode(JSON.stringify(payload)).length > MAX_BYTES) {
+    notify('This setup is too large to back up on the PC.', 'warning', 'settings')
+    return false
+  }
   commit()
   applySynced(payload)
-  meta = { updatedAt: Math.max(Date.now(), meta.updatedAt + 1), hash: signature(buildPayload()) }
+  meta = { updatedAt: Math.max(Date.now(), meta.updatedAt + 1, macAt + 1), hash: signature(buildPayload()) }
   storeMeta()
   push()
-  notify(`Copied your selection from ${preview.device.name}.`, 'info', 'settings')
   return true
 }
 
@@ -343,6 +395,20 @@ function handle(message: ServerMessage) {
     case 'settings':
       copied(parseSaved(message), message.id)
       break
+    case 'settingsSaved': {
+      if (message.id !== pendingSave?.id) break
+      const expectedAt = pendingSave.updatedAt
+      if (!message.ok || message.updatedAt < expectedAt) {
+        failedSave(message.message ?? 'The PC couldn’t save your setup. Try again.')
+        break
+      }
+      clearPendingSave()
+      macAt = message.updatedAt
+      settingsBackup.error = ''
+      retryAttempts = 0
+      push() // A newer local edit may have arrived while this save was pending.
+      break
+    }
     case 'settingsList':
       clearTimeout(listTimer)
       copier.devices = parseDevices(message.devices)
@@ -372,6 +438,12 @@ export function installSettingsSync() {
   meta = loadMeta()
   watch([() => SYNCED_KEYS.map((key) => settings[key]), () => keyboards.boards], schedule, { deep: true })
   onMessage(handle)
+  watch(() => state.status, (status) => {
+    if (status === 'connected') return
+    if (pendingSave) settingsBackup.error = 'Reconnect to the PC to save your setup there.'
+    clearPendingSave()
+    clearTimeout(retryTimer)
+  }, { flush: 'sync' })
   document.addEventListener('visibilitychange', () => {
     // Closing the app shouldn't lose a change still waiting out the delay.
     if (document.visibilityState === 'hidden' && saveTimer !== undefined) {

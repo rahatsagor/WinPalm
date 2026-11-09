@@ -6,8 +6,9 @@ namespace WinPalm.Services;
 
 internal sealed class SpeechService : IDisposable
 {
-  private sealed class Session(SpeechRecognitionEngine engine, PcmAudioStream stream)
+  private sealed class Session(SpeechRecognitionEngine engine, PcmAudioStream stream, uint? requestId)
   {
+    internal readonly uint? RequestId = requestId;
     internal readonly SpeechRecognitionEngine Engine = engine;
     internal readonly PcmAudioStream Stream = stream;
     internal volatile bool Cancelled;
@@ -17,6 +18,8 @@ internal sealed class SpeechService : IDisposable
     internal int Disposed;
   }
   private readonly ConcurrentDictionary<ulong, Session> sessions = new();
+  // Include recognizers still delivering a stopped recording's last phrase.
+  private readonly ConcurrentDictionary<Session, ulong> liveRecognizers = new();
   internal static string? LastStartupProblem { get; private set; }
   internal static string InstalledLanguages
   {
@@ -34,26 +37,31 @@ internal sealed class SpeechService : IDisposable
   {
     get { try { return SpeechRecognitionEngine.InstalledRecognizers().Count > 0; } catch (Exception error) when (error is PlatformNotSupportedException or System.Runtime.InteropServices.COMException or TypeInitializationException or DllNotFoundException or InvalidOperationException) { return false; } }
   }
-  internal bool Start(ulong id, string? locale)
+  internal bool Start(ulong id, string? locale, uint? requestId = null)
   {
     LastStartupProblem = null;
     // A dictation that was stopped but hasn't delivered its last phrase
     // finishes alongside the new one instead of losing that phrase.
+    Session? finishing = null;
     if (sessions.TryGetValue(id, out var previous) && previous.Stopping && !previous.Cancelled && sessions.TryRemove(new(id, previous)))
-      previous.Superseded = true;
-    Stop(id, true);
-    if (sessions.Count >= 4) return Fail(id, "All speech sessions are busy. Stop dictation on another device and try again.");
+    {
+      previous.Superseded = true; finishing = previous;
+    }
+    foreach (var pair in liveRecognizers.Where(pair => pair.Value == id && !ReferenceEquals(pair.Key, finishing))) Cancel(id, pair.Key);
+    if (liveRecognizers.Count >= 4) return Fail("All speech sessions are busy. Stop dictation on another device and try again.");
     var stage = "find a compatible offline speech language";
+    Session? created = null;
     try
     {
       var recognizers = SpeechRecognitionEngine.InstalledRecognizers();
       var recognizer = recognizers.FirstOrDefault(r => string.Equals(r.Culture.Name, locale, StringComparison.OrdinalIgnoreCase))
           ?? recognizers.FirstOrDefault(r => r.Culture.TwoLetterISOLanguageName == locale?.Split('-')[0])
           ?? recognizers.FirstOrDefault(r => r.Culture.Equals(CultureInfo.CurrentUICulture)) ?? recognizers.FirstOrDefault();
-      if (recognizer is null) return Fail(id, "No compatible offline Windows recognizer is installed. Open WinPalm → General → Windows speech settings and install an offline speech language.");
+      if (recognizer is null) return Fail("No compatible offline Windows recognizer is installed. Open WinPalm → General → Windows speech settings and install an offline speech language.");
       stage = $"open the {recognizer.Culture.DisplayName} recognizer";
       var engine = new SpeechRecognitionEngine(recognizer);
-      var stream = new PcmAudioStream(); var session = new Session(engine, stream);
+      var stream = new PcmAudioStream(); var session = new Session(engine, stream, requestId);
+      created = session; liveRecognizers[session] = id;
       sessions[id] = session;
       bool Current() => !session.Cancelled && sessions.TryGetValue(id, out var current) && ReferenceEquals(current, session);
       stage = $"load the {recognizer.Culture.DisplayName} dictation language";
@@ -62,35 +70,35 @@ internal sealed class SpeechService : IDisposable
       engine.SetInputToAudioStream(stream, new SpeechAudioFormatInfo(16000, AudioBitsPerSample.Sixteen, AudioChannel.Mono));
       engine.EndSilenceTimeout = TimeSpan.FromMilliseconds(900);
       engine.EndSilenceTimeoutAmbiguous = TimeSpan.FromMilliseconds(1200);
-      engine.SpeechHypothesized += (_, e) => { if (Current()) Update(id, "listening", e.Result.Text, false); };
-      engine.SpeechRecognized += (_, e) => { if ((Current() || (session.Superseded && !session.Cancelled)) && e.Result.Text.Length > 0) Update(id, "listening", e.Result.Text, true); };
+      engine.SpeechHypothesized += (_, e) => { if (Current()) Update(id, session.RequestId, "listening", e.Result.Text, false); };
+      engine.SpeechRecognized += (_, e) => { if ((Current() || (session.Superseded && !session.Cancelled)) && e.Result.Text.Length > 0) Update(id, session.RequestId, "listening", e.Result.Text, true); };
       engine.RecognizeCompleted += (sender, e) =>
       {
-        if (Current()) Update(id, e.Error is null ? "stopped" : "error", null, false, e.Error is null ? null : "Windows speech recognition stopped. Check the installed speech language.");
-        if (sessions.TryGetValue(id, out var current) && ReferenceEquals(current, session)) sessions.TryRemove(id, out _);
+        if (Current() || (session.Superseded && !session.Cancelled)) Update(id, session.RequestId, e.Error is null ? "stopped" : "error", null, false, e.Error is null ? null : "Windows speech recognition stopped. Check the installed speech language.");
+        sessions.TryRemove(new(id, session));
         _ = Task.Run(() => Cleanup(session));
       };
       stage = "start the Windows recognizer";
       engine.RecognizeAsync(RecognizeMode.Multiple);
       // Events may race a cancellation, but the generation check above
       // prevents a previous dictation reaching the next one.
-      _ = Task.Run(() => { if (Current()) Update(id, "listening", null, false); });
+      _ = Task.Run(() => { if (Current()) Update(id, session.RequestId, "listening", null, false); });
       return true;
     }
     catch (Exception error) when (Expected(error))
     {
-      Diagnostics.Record(error); Stop(id, true);
-      return Fail(id, $"Windows could not {stage}. {Code(error)} Open WinPalm → General to check speech setup and installed offline languages.");
+      Diagnostics.Record(error); if (created is not null) Cancel(id, created);
+      return Fail($"Windows could not {stage}. {Code(error)} Open WinPalm → General to check speech setup and installed offline languages.");
     }
   }
   private static bool Expected(Exception error) => error is InvalidOperationException or ArgumentException or NotSupportedException or System.Runtime.InteropServices.ExternalException or TypeInitializationException or DllNotFoundException or IOException;
   private static string Code(Exception error) => $"Error 0x{error.HResult:X8}.";
-  private static bool Fail(ulong id, string message)
+  private static bool Fail(string message)
   {
     LastStartupProblem = message;
-    // Queued before Start returns false, so the phone sees the actionable
-    // cause before the core's generic unavailable response.
-    Update(id, "error", null, false, message); return false;
+    // Return the specific cause through the start result. A synchronous
+    // callback here would reenter the core while its voice lock is held.
+    return false;
   }
   internal static string CheckSetup()
   {
@@ -120,30 +128,41 @@ internal sealed class SpeechService : IDisposable
   {
     if (sessions.TryGetValue(id, out var session) && !session.Stopping && !session.Stream.Append(pcm))
     {
-      Stop(id, true); _ = Task.Run(() => Update(id, "error", null, false, "Speech could not keep up. Try again."));
+      Stop(id, true); _ = Task.Run(() => Update(id, session.RequestId, "error", null, false, "Speech could not keep up. Try again."));
     }
   }
   internal void Stop(ulong id, bool cancel)
   {
+    if (cancel)
+    {
+      foreach (var pair in liveRecognizers.Where(pair => pair.Value == id)) Cancel(id, pair.Key);
+      return;
+    }
     if (!sessions.TryGetValue(id, out var session)) return;
+    if (session.Stopping) return;
     session.Stopping = true;
-    if (cancel) { session.Cancelled = true; sessions.TryRemove(id, out _); }
     session.Stream.Complete();
-    if (cancel) _ = Task.Run(async () => { try { session.Engine.RecognizeAsyncCancel(); } catch (InvalidOperationException) { } finally { await Task.Delay(250); Cleanup(session); } });
-    else _ = Task.Run(async () =>
+    _ = Task.Run(async () =>
     {
       await Task.Delay(3000);
-      if (sessions.TryGetValue(id, out var current) && ReferenceEquals(current, session)) Stop(id, true);
-      else if (session.Superseded && !session.Cancelled)
-      {
-        // The recognizer never delivered its final text.
-        session.Cancelled = true;
-        try { session.Engine.RecognizeAsyncCancel(); } catch (InvalidOperationException) { }
-        await Task.Delay(250); Cleanup(session);
-      }
+      // Cancel this exact recording; a newer one may already own the ID.
+      if (Volatile.Read(ref session.Disposed) == 0) Cancel(id, session);
     });
   }
-  private static void Cleanup(Session session) { if (Interlocked.Exchange(ref session.Disposed, 1) != 0) return; session.Stream.Complete(); session.Engine.Dispose(); session.Stream.Dispose(); }
-  private static void Update(ulong id, string state, string? text, bool final, string? message = null) => CoreBridge.TryCall(new { op = "voiceUpdate", id, update = new { state, text, isFinal = final, message } });
-  public void Dispose() { foreach (var id in sessions.Keys) Stop(id, true); }
+  private void Cancel(ulong id, Session session)
+  {
+    if (session.Cancelled || Volatile.Read(ref session.Disposed) != 0) return;
+    session.Cancelled = session.Stopping = true;
+    sessions.TryRemove(new(id, session)); session.Stream.Complete();
+    _ = Task.Run(async () => { try { session.Engine.RecognizeAsyncCancel(); } catch (InvalidOperationException) { } finally { await Task.Delay(250); Cleanup(session); } });
+  }
+  private void Cleanup(Session session)
+  {
+    if (Interlocked.Exchange(ref session.Disposed, 1) != 0) return;
+    session.Stream.Complete();
+    try { session.Engine.Dispose(); }
+    finally { session.Stream.Dispose(); liveRecognizers.TryRemove(session, out _); }
+  }
+  private static void Update(ulong id, uint? requestId, string state, string? text, bool final, string? message = null) => CoreBridge.TryCall(new { op = "voiceUpdate", id, update = new { requestId, state, text, isFinal = final, message } });
+  public void Dispose() { foreach (var pair in liveRecognizers) Cancel(pair.Value, pair.Key); }
 }

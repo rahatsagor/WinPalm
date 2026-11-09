@@ -87,11 +87,13 @@ On success the PC sends `welcome`:
 | `token` | Present after a new pairing with `remember: true`. Store it and use it for `token` auth. |
 | `features` | `{voice, shell, secure, permission}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level. |
 | `deck` | The current deck (see below). |
+| `deckRevision` | The revision of the current deck during this host run. Missing on older hosts. Send it with `deckSave` to avoid overwriting newer changes. |
 | `layout` | The PC's keyboard layout, if known. |
 | `volume` | `{value: 0–1, muted}`, if the output device has a volume control. |
 | `capsLock` | Whether Caps Lock is on. |
 | `paused` | Input is paused on the PC. |
 | `settings` | `{settings, updatedAt}`: the settings this device saved with `settingsSave`, if the PC has any (see [Phone settings](#phone-settings)). |
+| `settingsSaveAck` | True when `settingsSave` request IDs receive a persistence acknowledgement. Missing on older hosts. |
 
 Otherwise the PC sends `denied` and closes the connection:
 
@@ -188,13 +190,13 @@ can't read. Actions are the same objects deck buttons store, tagged by `kind`:
 | --- | --- | --- |
 | `apps` | | `apps` |
 | `appAction` | `id`, `op` | `appsChanged` once the app responds |
-| `deckSave` | `deck` | `deck` to every connected device, or a `notice` with code `deck` when the PC rejected or couldn't read the deck, could not save it, or was too busy to try |
+| `deckSave` | `deck`, optional `id` and `revision` | `deck` to every device after persistence succeeds. With `id`, also returns `deckSaved` with that ID, success and revision. A stale `revision` is rejected. Without `id`, failures use a `notice` with code `deck`. |
 | `volume` | `value?`, `muted?` | `volume` |
 | `clipboardSet` | `text`, up to 64 KiB | a `notice` with code `tooLong` if it is longer |
 | `clipboardGet` | | `clipboard`, cut to 64 KiB (UTF-8) |
-| `voiceStart` | `locale?` | `voice` updates |
-| `voiceStop` | `cancel` | final `voice` update |
-| `settingsSave` | `settings`, `updatedAt` | none; a `notice` with code `settings` on failure |
+| `voiceStart` | `locale?`, optional `id` unique to this dictation | `voice` updates with the same `id` |
+| `voiceStop` | `cancel`, optional `id` | final `voice` update when not cancelled; a stale ID cannot stop a newer dictation |
+| `settingsSave` | `settings`, `updatedAt`, optional `id` | With an ID, `settingsSaved` confirms persistence or explains a failure. Without an ID, only failures return a `notice` with code `settings`. |
 | `settingsList` | | `settingsList` |
 | `settingsCopy` | `from` (device ID), optional `id` (request ID) | `settings` with the same `id` if supplied, or a `notice` with code `settings` |
 
@@ -204,7 +206,8 @@ can't read. Actions are the same objects deck buttons store, tagged by `kind`:
 | --- | --- | --- |
 | `apps` | `apps: [{id, name, running, active, hidden}]` | Answer to `apps`. |
 | `appsChanged` | | Apps launched, quit, hid or changed focus. Request `apps` again if the list is visible. |
-| `deck` | `deck` | The deck changed. |
+| `deck` | `deck`, `revision` | The deck changed. Revisions are present on updated hosts. |
+| `deckSaved` | `id`, `ok`, `revision`, `message?` | Answer to a `deckSave` with an ID, after persistence succeeds or the save is refused. Keep the edit’s draft until this reply. |
 | `layout` | `layout` | The PC's input source changed. |
 | `volume` | `value`, `muted` | Output volume changed. |
 | `volumeUnavailable` | | The output device has no volume control (HDMI, for example). |
@@ -213,11 +216,33 @@ can't read. Actions are the same objects deck buttons store, tagged by `kind`:
 | `features` | `features` | Permissions or settings changed. |
 | `notice` | `level`, `code`, `message` | Something the person should know, e.g. `secureInput` when a password field blocks typing. |
 | `clipboard` | `text` | Answer to `clipboardGet`. |
-| `voice` | `state`, `text?`, `final`, `message?` | Voice typing: `listening`, `stopped`, `unavailable` or `error`. |
+| `voice` | `id?`, `state`, `text?`, `final`, `message?` | Voice typing: `listening`, `stopped`, `unavailable` or `error`. The ID identifies the dictation that produced this reply, including late final text. |
 | `actionResult` | `id?`, `ok`, `message?` | Answer to an `action` with an `id`, or a failed action without one. |
 | `settingsList` | `devices: [{id, name, model, updatedAt}]` | Answer to `settingsList`: other paired devices with saved settings, newest first. |
+| `settingsSaved` | `id`, `ok`, `updatedAt`, `message?` | Answer to `settingsSave` with an ID. A successful reply reports the persisted timestamp, including an idempotent retry. |
 | `settings` | `settings`, `updatedAt`, optional `id` | Answer to `settingsCopy`: that device's saved settings, with the request ID echoed if supplied. |
 | `bye` | `reason`, `reconnect?` | The PC is closing the connection, with a message to show. `reconnect: true` means the PC stopped or restarted its server and the phone may reconnect with its token on its own; otherwise (disconnected or removed on the PC, protocol errors) it waits for the person to reconnect. |
+
+### Save and dictation lifetimes
+
+The optional Deck revisions, save IDs and voice IDs extend protocol 1 without
+changing older requests. Updated clients wait for `deckSaved`; for an older
+host without revisions, they accept an echo of the requested deck instead.
+Only revision-aware saves detect conflicts. Undo history belongs to this
+connection and is discarded after a remote edit or reconnect.
+
+When `settingsSaveAck` is true, clients keep settings dirty until the matching
+`settingsSaved` succeeds. A timeout or failed write can be retried with the
+same timestamp and a fresh request ID. The phone retries three times with
+backoff, then keeps an explicit retry available in Settings. Reconnecting
+reconciles the PC's persisted copy again. Older hosts retain the original
+send-and-reconcile behavior.
+
+Pausing control or disabling voice cancels active recognition and invalidates
+queued starts and late recognition results. Audio from the cancelled stream
+is refused even after control resumes; the phone must send a new `voiceStart`.
+Clients must release microphone tracks when paused, disconnected or voice is
+disabled. Tagged replies from earlier dictations cannot end the active one.
 
 ### Keyboard layout
 
