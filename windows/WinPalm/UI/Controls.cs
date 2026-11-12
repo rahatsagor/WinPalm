@@ -56,7 +56,7 @@ internal static class TonePalette
   };
 }
 
-/// Smooth-scrolling centered column page container.
+/// Scrollable centered column page container.
 internal sealed class PageScrollView : Panel
 {
   private readonly List<(Control Control, int Gap)> blocks = [];
@@ -91,7 +91,7 @@ internal sealed class PageScrollView : Panel
     }
     finally
     {
-      ResumeLayout(false);
+      ResumeLayout(true);
       inLayout = false;
     }
   }
@@ -100,37 +100,45 @@ internal sealed class PageScrollView : Panel
   {
     if (inLayout || IsDisposed || Width <= 0) return;
     inLayout = true;
-    SuspendLayout();
     try
     {
       for (var pass = 0; pass < 2; pass++)
       {
         var viewW = ClientSize.Width;
         if (viewW <= 0) break;
-        var padX = Theme.Px(34);
-        var padTop = Theme.Px(26);
-        var padBottom = Theme.Px(34);
-        var colW = Math.Clamp(viewW - padX * 2, Theme.Px(460), Theme.Px(748));
-        var scroll = AutoScrollPosition;
-        var colX = Math.Max(padX, (viewW - colW) / 2) + scroll.X;
-        var y = padTop;
-        var lastGap = 0;
-        foreach (var (control, gap) in blocks)
+        SuspendLayout();
+        try
         {
-          if (!control.IsShown()) continue;
-          var h = control is ISizableBlock block ? block.GetHeightForWidth(colW) : control.Height;
-          control.SetBounds(colX, y + scroll.Y, colW, h);
-          lastGap = Theme.Px(gap);
-          y += h + lastGap;
+          var padX = Theme.Px(34);
+          var padTop = Theme.Px(26);
+          var padBottom = Theme.Px(34);
+          var colW = Math.Clamp(viewW - padX * 2, Theme.Px(460), Theme.Px(748));
+          var scroll = AutoScrollPosition;
+          var colX = Math.Max(padX, (viewW - colW) / 2) + scroll.X;
+          var y = padTop;
+          var lastGap = 0;
+          foreach (var (control, gap) in blocks)
+          {
+            if (!control.IsShown()) continue;
+            var h = control is ISizableBlock block ? block.GetHeightForWidth(colW) : control.Height;
+            control.SetBounds(colX, y + scroll.Y, colW, h);
+            lastGap = Theme.Px(gap);
+            y += h + lastGap;
+          }
+          var contentHeight = Math.Max(0, y - lastGap + padBottom);
+          AutoScrollMinSize = new Size(0, contentHeight);
         }
-        var contentHeight = Math.Max(0, y - lastGap + padBottom);
-        AutoScrollMinSize = new Size(0, contentHeight);
+        finally
+        {
+          // AutoScrollMinSize queues a WinForms layout. Run it before checking
+          // the viewport width, so native scrollbars and the next pass agree.
+          ResumeLayout(true);
+        }
         if (ClientSize.Width == viewW) break;
       }
     }
     finally
     {
-      ResumeLayout(false);
       inLayout = false;
     }
     Invalidate();

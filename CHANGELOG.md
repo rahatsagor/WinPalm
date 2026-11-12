@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-12
+
+- Fix scrolling inside the Windows app after switching pages. Long pages show their scrollbar immediately, and shorter pages clear the previous scroll position.
+- Keep page widths aligned with the scrollbar after navigation, window resizing and reopening from the tray.
+- Add native Windows regression checks for page changes, mouse-wheel scrolling and reaching the bottom of a page.
+
 ## [0.3.1] - 2026-11-12
 
 A redesigned Windows app with clearer pairing controls, grouped settings, and a consistent dark interface.

@@ -24,6 +24,7 @@ internal static class SelfTest
       CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); KeyboardLayouts.UpdateTiming(); checks.Add("Windows layout and input timing");
       if (System.Runtime.InteropServices.Marshal.SizeOf<Win32.Input>() != 40) throw new InvalidOperationException("Unexpected Win32 INPUT ABI size");
       VerifyDesktopUi(); checks.Add("desktop UI layout, stepper and badge wrapping");
+      VerifyPageScrolling(); checks.Add("desktop page scrolling after navigation, resize and tray reopen");
       if (desktop.Apps.List().Length < 6 || desktop.Apps.Action("not-a-catalog-id", "open")) throw new InvalidOperationException("App catalog validation failed");
       checks.Add("Windows app catalog and identifier validation");
       var nativeIcons = 0;
@@ -108,5 +109,85 @@ internal static class SelfTest
     using var rowWithBadge = new SettingActionRow(longName, "Last used today", IconKind.Devices, BadgeTone.Good, "Connected · HTTPS", BadgeTone.Good);
     if (rowWithBadge.GetHeightForWidth(Theme.Px(340)) <= rowWithoutBadge.GetHeightForWidth(Theme.Px(340)))
       throw new InvalidOperationException("SettingActionRow did not reserve width for status pill");
+  }
+
+  private static void VerifyPageScrolling()
+  {
+    using var hostForm = new Form
+    {
+      AutoScaleMode = AutoScaleMode.None,
+      ClientSize = Theme.Px(800, 480),
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000),
+      ShowInTaskbar = false
+    };
+    using var page = new PageScrollView();
+    hostForm.Controls.Add(page);
+    hostForm.Show();
+
+    Control LoadPage(int height)
+    {
+      page.ClearBlocks();
+      var content = new ScrollTestBlock(height);
+      page.AddBlock(content, 0);
+      page.Relayout();
+      if (page.AutoScrollPosition != Point.Empty || content.Top != Theme.Px(26))
+        throw new InvalidOperationException("Desktop page navigation did not reset the scroll position");
+      return content;
+    }
+
+    void VerifyScrollable(Control content)
+    {
+      if (!page.VerticalScroll.Visible || page.HorizontalScroll.Visible)
+        throw new InvalidOperationException("Long desktop page is missing its vertical scrollbar");
+      var expectedWidth = Math.Clamp(page.ClientSize.Width - Theme.Px(68), Theme.Px(460), Theme.Px(748));
+      if (content.Width != expectedWidth)
+        throw new InvalidOperationException("Desktop page did not account for the native scrollbar width");
+
+      var originalTop = content.Top;
+      // Exercise the real desktop wheel message, independently of phone input.
+      Win32.SendMessageW(page.Handle, 0x020A, -120 << 16, 0); // WM_MOUSEWHEEL
+      var scroll = page.AutoScrollPosition;
+      if (scroll.Y >= 0 || content.Top >= originalTop)
+        throw new InvalidOperationException("Mouse wheel did not scroll the desktop page");
+      page.Relayout();
+      if (page.AutoScrollPosition != scroll)
+        throw new InvalidOperationException("Desktop page refresh lost the scroll position");
+
+      Win32.SendMessageW(page.Handle, 0x0115, 7, 0); // WM_VSCROLL, SB_BOTTOM
+      if (content.Bottom > page.ClientSize.Height - Theme.Px(34))
+        throw new InvalidOperationException("Desktop page scrollbar cannot reach the final content");
+    }
+
+    // Rebuild the shared container without resizing the window, including two
+    // pages with identical heights and transitions through non-scrolling pages.
+    foreach (var height in new[] { 1100, 1100, 120, 1400, 120, 1100 })
+    {
+      var content = LoadPage(height);
+      if (height > 480) VerifyScrollable(content);
+      else if (page.VerticalScroll.Visible || page.HorizontalScroll.Visible)
+        throw new InvalidOperationException("Short desktop page retained a stale scrollbar");
+    }
+
+    hostForm.ClientSize = Theme.Px(800, 1800);
+    if (page.VerticalScroll.Visible || page.AutoScrollPosition != Point.Empty)
+      throw new InvalidOperationException("Desktop page scrollbar did not clear after enlarging the window");
+    hostForm.ClientSize = Theme.Px(800, 480);
+    VerifyScrollable(page.Controls[0]);
+
+    hostForm.Hide();
+    _ = LoadPage(120);
+    var reopenedContent = LoadPage(1100);
+    hostForm.Show();
+    page.Relayout();
+    VerifyScrollable(reopenedContent);
+  }
+
+  // Like the app's cards, start without bounds and measure during Relayout.
+  // A pre-sized panel would trigger WinForms scrolling as soon as it is added,
+  // masking the missing layout pass that broke page navigation.
+  private sealed class ScrollTestBlock(int height) : Control, ISizableBlock
+  {
+    public int GetHeightForWidth(int width) => Theme.Px(height);
   }
 }
