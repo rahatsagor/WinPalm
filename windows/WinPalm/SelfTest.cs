@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using WinPalm.Services;
+using WinPalm.UI;
 namespace WinPalm;
 /// Disposable Windows integration check. Never touches the owner's pairing data.
 internal static class SelfTest
@@ -22,6 +23,7 @@ internal static class SelfTest
       checks.Add("native DLL ABI and server start");
       CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); KeyboardLayouts.UpdateTiming(); checks.Add("Windows layout and input timing");
       if (System.Runtime.InteropServices.Marshal.SizeOf<Win32.Input>() != 40) throw new InvalidOperationException("Unexpected Win32 INPUT ABI size");
+      VerifyDesktopUi(); checks.Add("desktop UI layout, stepper and badge wrapping");
       if (desktop.Apps.List().Length < 6 || desktop.Apps.Action("not-a-catalog-id", "open")) throw new InvalidOperationException("App catalog validation failed");
       checks.Add("Windows app catalog and identifier validation");
       var nativeIcons = 0;
@@ -63,5 +65,48 @@ internal static class SelfTest
     var index = Array.IndexOf(args, "--report"); var json = JsonSerializer.Serialize(report, Preferences.Json);
     if (index >= 0 && index + 1 < args.Length) File.WriteAllText(args[index + 1], json);
     else File.WriteAllText(Path.Combine(Path.GetTempPath(), "WinPalm-selftest.json"), json);
+  }
+
+  private static void VerifyDesktopUi()
+  {
+    using var hostForm = new Form { AutoScaleMode = AutoScaleMode.None, ClientSize = new Size(1040, 740) };
+    using var page = new PageScrollView();
+    using var sidebar = new SidebarChrome("Connect", _ => { }, () => { }, "v0.2.0");
+    hostForm.Controls.Add(page);
+    hostForm.Controls.Add(sidebar);
+    page.BringToFront();
+    hostForm.PerformLayout();
+
+    var pauseBtn = new PalmButton("Pause control", () => { }, ButtonTone.Secondary, IconKind.Pause, compact: true);
+    var renewBtn = new PalmButton("New QR & PIN", () => { }, ButtonTone.Secondary, IconKind.Refresh, compact: true);
+    var header = new PageHeader("Your PC, in your palm.", "Scan on the same private Wi-Fi.", pauseBtn, renewBtn);
+    header.SetBadge("Ready to pair", BadgeTone.Accent);
+
+    var hero = new PairingHeroCard(false, _ => { }, () => { }, () => { }, () => { });
+    hero.UpdatePairing(true, true, "http://127.0.0.1:8790/#pair=selftest", "http://127.0.0.1:8790", "123456", 55);
+
+    var stepper = new NumericStepper(8790, 1024, 65535);
+    if (stepper.Value != 8790) throw new InvalidOperationException("NumericStepper initial value mismatch");
+
+    var card = new SurfaceCard("Network & Binding", "Verify unshown layout and row measurement.");
+    card.AddRow(new SettingActionRow("Preferred TCP port", "Default is 8790.", IconKind.Advanced, actions: stepper), dividerAbove: false);
+    var hiddenProgress = new StyledProgressBar();
+    hiddenProgress.SetShown(false);
+    card.AddRow(hiddenProgress, dividerAbove: false);
+
+    page.AddBlock(header);
+    page.AddBlock(hero);
+    page.AddBlock(card);
+    page.AddBlock(new CapabilitiesGrid(), 0);
+    page.Relayout();
+
+    if (header.Height <= 0 || hero.Top < header.Bottom || card.Top < hero.Bottom || pauseBtn.Left <= 0)
+      throw new InvalidOperationException("Unshown PageScrollView failed to lay out blocks or header actions");
+
+    var longName = "Personal Windows Workstation Studio Phone Pro Max Edition";
+    using var rowWithoutBadge = new SettingActionRow(longName, "Last used today", IconKind.Devices, BadgeTone.Good);
+    using var rowWithBadge = new SettingActionRow(longName, "Last used today", IconKind.Devices, BadgeTone.Good, "Connected · HTTPS", BadgeTone.Good);
+    if (rowWithBadge.GetHeightForWidth(Theme.Px(340)) <= rowWithoutBadge.GetHeightForWidth(Theme.Px(340)))
+      throw new InvalidOperationException("SettingActionRow did not reserve width for status pill");
   }
 }

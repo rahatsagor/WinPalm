@@ -20,6 +20,7 @@ internal sealed class HostContext : ApplicationContext
   private readonly object lockGate = new();
   private readonly ControlPauseState automaticPause = new();
   private bool AutomaticallyPaused { get { lock (lockGate) return automaticPause.Active; } }
+  private readonly ToolStripMenuItem statusItem;
   private readonly ToolStripMenuItem pauseItem;
   private readonly ToolStripMenuItem updateItem;
   private bool busy, quitting;
@@ -31,11 +32,17 @@ internal sealed class HostContext : ApplicationContext
     CoreBridge.Call(new { op = "create", config = Services.Config() });
     window = new MainWindow(this); _ = window.Handle;
     CoreBridge.Event = value => { if (!quitting && !window.IsDisposed) window.BeginInvoke(() => OnEvent(value)); };
-    var menu = new ContextMenuStrip { Font = new Font("Segoe UI", 10) };
+    var menu = new ContextMenuStrip { Font = Theme.Font(9.5f) };
+    Theme.StyleContextMenu(menu);
+    menu.Opening += (_, _) => { menu.Font = Theme.Font(9.5f); menu.Padding = Theme.Px(6, 6, 6, 6); };
+    statusItem = new ToolStripMenuItem("WinPalm · Starting") { Enabled = false };
+    menu.Items.Add(statusItem);
+    menu.Items.Add(new ToolStripSeparator());
     menu.Items.Add("Open WinPalm", null, (_, _) => ShowWindow());
     pauseItem = new("Pause control", null, (_, _) => TogglePause()); menu.Items.Add(pauseItem);
     menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Restart server", null, (_, _) => Restart());
     updateItem = new("Check for updates…", null, async (_, _) => { ShowWindow(); window.ShowUpdates(); await Updates.CheckAsync(); }); menu.Items.Add(updateItem);
+    menu.Items.Add(new ToolStripSeparator());
     menu.Items.Add("Quit WinPalm", null, (_, _) => ExitThread());
     tray = new NotifyIcon { Text = "WinPalm · Starting", Icon = window.Icon, ContextMenuStrip = menu, Visible = true };
     tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
@@ -92,7 +99,7 @@ internal sealed class HostContext : ApplicationContext
   internal void Start()
   {
     try { CoreBridge.Call(new { op = "start" }); KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); RefreshSoon(); }
-    catch (Exception error) { Diagnostics.Record(error); MessageBox.Show(window, error.Message, "WinPalm couldn't start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    catch (Exception error) { Diagnostics.Record(error); PalmDialog.Info(window.Visible ? window : null, "WinPalm couldn't start", error.Message, BadgeTone.Danger); }
   }
   internal void Stop() { CoreBridge.TryCall(new { op = "stop" }); RefreshSoon(); }
   internal void Restart() { Stop(); Start(); }
@@ -114,7 +121,9 @@ internal sealed class HostContext : ApplicationContext
   private void UpdateTray()
   {
     var paused = Snapshot.GetProperty("paused").GetBoolean(); var running = Snapshot.GetProperty("running").GetBoolean(); var count = Snapshot.GetProperty("connected").GetArrayLength();
-    tray.Text = !running ? "WinPalm · Sharing stopped" : paused ? "WinPalm · Paused" : $"WinPalm · {count} connected";
+    var summary = !running ? "WinPalm · Sharing stopped" : paused ? "WinPalm · Paused" : count > 0 ? $"WinPalm · {count} connected" : "WinPalm · Ready to pair";
+    tray.Text = summary;
+    statusItem.Text = summary;
     pauseItem.Text = paused ? "Resume control" : "Pause control";
   }
   private async Task Poll()
@@ -152,7 +161,7 @@ internal sealed class HostContext : ApplicationContext
         var request = value.GetProperty("request"); var id = request.GetProperty("id").GetUInt64();
         if (AutomaticallyPaused) { CoreBridge.TryCall(new { op = "approve", id, allow = false }); break; }
         if (approvals.ContainsKey(id)) break;
-        var approval = new ApprovalWindow(request); approvals[id] = approval; approval.Show();
+        var approval = new ApprovalWindow(request, approvals.Count); approvals[id] = approval; approval.Show();
         tray.ShowBalloonTip(8000, "WinPalm pairing request", "A nearby device is asking to control this PC. Review its name and address in WinPalm.", ToolTipIcon.Info); break;
       case "approvalEnded":
         if (approvals.Remove(value.GetProperty("id").GetUInt64(), out var ended)) { ended.End(); ended.Dispose(); }

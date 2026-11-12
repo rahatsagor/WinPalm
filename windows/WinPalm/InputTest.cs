@@ -6,6 +6,8 @@ namespace WinPalm;
 /// before every send. No shell, external app, or clipboard writes are used.
 internal static class InputTest
 {
+  private const string TestRevision = "20261112-input-r3";
+
   internal static int Run(string[] args)
   {
     using var form = new Form { Text = "WinPalm · Native input test", ClientSize = new Size(700, 420), StartPosition = FormStartPosition.CenterScreen, TopMost = true };
@@ -13,6 +15,7 @@ internal static class InputTest
     using var status = new Label { Text = "Testing in this temporary editor. Leave the mouse and keyboard idle for a few seconds.", Dock = DockStyle.Top, Height = 64, Padding = new Padding(12) };
     form.Controls.Add(editor); form.Controls.Add(status);
     var checks = new List<string>(); var result = 1;
+    object? pauseObservation = null;
     var directory = Path.Combine(Path.GetTempPath(), "WinPalm-input-test-" + Guid.NewGuid());
     var originalCursor = Cursor.Position;
     form.Shown += async (_, _) =>
@@ -33,9 +36,7 @@ internal static class InputTest
         socket = new ClientWebSocket(); socket.Options.SetRequestHeader("Origin", $"http://127.0.0.1:{port}");
         await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/ws"), timeout.Token);
         await Send(socket, new { t = "hello", v = 1, device = new { id = "native-input-test", name = "Disposable input test", model = "Windows" }, auth = new { method = "pair", code = link.Fragment["#pair=".Length..] }, remember = false }, timeout.Token);
-        var buffer = new byte[65536]; var message = await socket.ReceiveAsync(buffer, timeout.Token);
-        using var welcome = JsonDocument.Parse(buffer.AsMemory(0, message.Count));
-        if (welcome.RootElement.GetProperty("t").GetString() != "welcome") throw new InvalidOperationException("Local pairing failed.");
+        await ReceiveMatching(socket, message => message.GetProperty("t").GetString() == "welcome", "Local pairing", timeout.Token);
         form.Activate(); editor.Focus(); await Task.Delay(150, timeout.Token);
         void Focus() { if (Win32.GetForegroundWindow() != form.Handle || !editor.Focused) throw new InvalidOperationException("The test window lost focus; input was stopped. Run again while leaving the PC idle."); }
         async Task Submit(object value) { Focus(); await Send(socket, value, timeout.Token); }
@@ -56,15 +57,40 @@ internal static class InputTest
         await Expect(() => editor.Text == "replaced safe", "Unicode ignores held remote Ctrl");
         await Submit(new { t = "tap", code = 0x24 });
         await Expect(() => editor.Text.EndsWith("\r\n", StringComparison.Ordinal), "Enter scan code");
-        await Submit(new { t = "key", code = 0x31, down = true }); await Task.Delay(450, timeout.Token);
+        var spacesBeforeHold = editor.Text.Count(c => c == ' ');
+        await Submit(new { t = "key", code = 0x31, down = true });
+        await Expect(() => editor.Text.Count(c => c == ' ') >= spacesBeforeHold + 3, "Held key and repeat");
         await Submit(new { t = "key", code = 0x31, down = false });
-        await Expect(() => editor.Text.Count(c => c == ' ') >= 4, "Held key and repeat");
-        var before = editor.Text;
-        await Submit(new { t = "key", code = 0x38, down = true }); await Task.Delay(80, timeout.Token);
+        // Sending a key-up only queues it. Wait for both native release and a
+        // later text marker to reach the editor before recording the baseline;
+        // otherwise an already-posted Space repeat can look like paused input.
+        const string repeatEnd = "[repeat-ended]";
+        await Submit(new { t = "text", text = repeatEnd });
+        await Expect(() => (Win32.GetAsyncKeyState(0x20) & 0x8000) == 0 && editor.Text.EndsWith(repeatEnd, StringComparison.Ordinal), "Held Space released and queued text settled");
+        await Submit(new { t = "key", code = 0x38, down = true });
+        await Expect(() => (Win32.GetAsyncKeyState(0xa0) & 0x8000) != 0, "Remote Shift held before pause");
         CoreBridge.Call(new { op = "pause", paused = true });
-        await Send(socket, new { t = "text", text = "BLOCKED" }, timeout.Token); await Task.Delay(150, timeout.Token);
-        if (editor.Text != before) throw new InvalidOperationException("Pause allowed input");
-        checks.Add("Pause blocks input and releases held keys");
+        if (!CoreBridge.Call(new { op = "status" }).GetProperty("paused").GetBoolean()) throw new InvalidOperationException("Host did not enter the paused state");
+        await ReceiveMatching(socket, message => message.GetProperty("t").GetString() == "paused" && message.GetProperty("paused").GetBoolean(), "Phone pause notification", timeout.Token);
+        await Expect(() => (Win32.GetAsyncKeyState(0xa0) & 0x8000) == 0, "Pause releases held Shift");
+        var before = editor.Text;
+        const string blockedText = "[BLOCKED-WHILE-PAUSED]";
+        await Send(socket, new { t = "text", text = blockedText }, timeout.Token);
+        await ReceiveMatching(socket, message => message.GetProperty("t").GetString() == "notice" && message.GetProperty("code").GetString() == "paused", "Paused text rejection", timeout.Token);
+        // Let posted Windows messages run after the server has handled the
+        // attempted text. Do not discard or reset any editor changes here.
+        await Task.Delay(250, timeout.Token);
+        Focus();
+        pauseObservation = new
+        {
+          beforeLength = before.Length,
+          afterLength = editor.Text.Length,
+          blockedMarkerObserved = editor.Text.Contains(blockedText, StringComparison.Ordinal),
+          spaceHeld = (Win32.GetAsyncKeyState(0x20) & 0x8000) != 0,
+          shiftHeld = (Win32.GetAsyncKeyState(0xa0) & 0x8000) != 0
+        };
+        if (editor.Text != before) throw new InvalidOperationException("Editor changed after confirmed pause and text rejection; see pauseObservation");
+        checks.Add("Pause rejects phone text without changing the editor");
         CoreBridge.Call(new { op = "pause", paused = false });
         await Submit(new { t = "text", text = "after" }); await Expect(() => editor.Text.EndsWith("after", StringComparison.Ordinal), "Resume after pause");
         // Pointer stays within this temporary editor.
@@ -74,14 +100,15 @@ internal static class InputTest
         await Expect(() => Cursor.Position.X > point.X && Cursor.Position.Y > point.Y, "Relative pointer movement");
         var clicks = 0; editor.MouseDown += (_, _) => clicks++;
         await Submit(new { t = "button", button = "left", op = "click" }); await Expect(() => clicks > 0, "Native mouse click");
-        await Submit(new { t = "key", code = 0x3b, down = true }); await Task.Delay(80, timeout.Token);
+        await Submit(new { t = "key", code = 0x3b, down = true });
+        await Expect(() => (Win32.GetAsyncKeyState(0xa2) & 0x8000) != 0, "Remote Ctrl held before disconnect");
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Finished", timeout.Token);
-        await Task.Delay(200, timeout.Token);
-        if ((Win32.GetAsyncKeyState(0x11) & 0x8000) != 0) throw new InvalidOperationException("Ctrl remained held after disconnect");
-        checks.Add("Disconnect releases modifiers"); result = 0;
-        Write(args, new { ok = true, checks, nativeInputTested = true, architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString() });
+        checks.Add("WebSocket close handshake");
+        await Expect(() => (Win32.GetAsyncKeyState(0x11) & 0x8000) == 0, "Disconnect releases modifiers");
+        result = 0;
+        Write(args, new { ok = true, checks, nativeInputTested = true, testRevision = TestRevision, architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), pauseObservation });
       }
-      catch (Exception error) { Write(args, new { ok = false, checks, error = error.Message, nativeInputTested = true }); }
+      catch (Exception error) { Write(args, new { ok = false, checks, error = error.Message, nativeInputTested = true, testRevision = TestRevision, architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), pauseObservation }); }
       finally
       {
         socket?.Abort(); socket?.Dispose(); CoreBridge.TryCall(new { op = "pause", paused = true }); CoreBridge.TryCall(new { op = "stop" });
@@ -93,6 +120,33 @@ internal static class InputTest
     Application.Run(form); return result;
   }
   private static Task Send(ClientWebSocket socket, object message, CancellationToken token) => socket.SendAsync(JsonSerializer.SerializeToUtf8Bytes(message), WebSocketMessageType.Text, true, token);
+  private static async Task ReceiveMatching(ClientWebSocket socket, Func<JsonElement, bool> matches, string step, CancellationToken token)
+  {
+    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+    deadline.CancelAfter(TimeSpan.FromSeconds(3));
+    var buffer = new byte[65536];
+    try
+    {
+      while (true)
+      {
+        var count = 0;
+        WebSocketReceiveResult received;
+        do
+        {
+          if (count == buffer.Length) throw new InvalidOperationException("The test received an oversized server message");
+          received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer, count, buffer.Length - count), deadline.Token);
+          if (received.MessageType != WebSocketMessageType.Text) throw new InvalidOperationException("The test connection closed or returned a non-text message");
+          count += received.Count;
+        } while (!received.EndOfMessage);
+        using var message = JsonDocument.Parse(buffer.AsMemory(0, count));
+        if (matches(message.RootElement)) return;
+      }
+    }
+    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+    {
+      throw new InvalidOperationException(step + " was not confirmed by the server");
+    }
+  }
   private static void Write(string[] args, object result)
   {
     var index = Array.IndexOf(args, "--report");

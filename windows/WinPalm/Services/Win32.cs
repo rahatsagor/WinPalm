@@ -91,5 +91,29 @@ internal static class Win32
   }
   [DllImport("user32.dll")] internal static extern bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint key);
   [DllImport("user32.dll")] internal static extern bool UnregisterHotKey(nint hwnd, int id);
+  [DllImport("user32.dll")] internal static extern bool ReleaseCapture();
   [DllImport("dwmapi.dll")] internal static extern int DwmSetWindowAttribute(nint window, int attribute, ref int value, int size);
+
+  internal static void ApplyWindowChrome(nint window, Color captionColor, Color borderColor, bool roundCorners = true)
+  {
+    if (window == 0) return;
+    var dark = 1;
+    _ = DwmSetWindowAttribute(window, 20, ref dark, sizeof(int));
+    if (roundCorners)
+    {
+      var corner = 2; // DWMWCP_ROUND
+      _ = DwmSetWindowAttribute(window, 33, ref corner, sizeof(int));
+    }
+    var border = ColorTranslator.ToWin32(borderColor);
+    _ = DwmSetWindowAttribute(window, 34, ref border, sizeof(int));
+    var caption = ColorTranslator.ToWin32(captionColor);
+    _ = DwmSetWindowAttribute(window, 35, ref caption, sizeof(int));
+  }
+
+  internal static void DragWindow(nint window)
+  {
+    if (window == 0) return;
+    ReleaseCapture();
+    _ = SendMessageW(window, 0xA1, 2, 0);
+  }
 }

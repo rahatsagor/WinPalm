@@ -271,6 +271,7 @@ pub(crate) async fn run<S>(
         paste_queued: None,
     };
 
+    let mut peer_closed = false;
     if send(&mut sink, &welcome).await {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
         loop {
@@ -281,7 +282,7 @@ pub(crate) async fn run<S>(
                     let reply = match message {
                         Message::Text(text) => conn.text(&text),
                         Message::Binary(data) => { conn.binary(&data); None }
-                        Message::Close(_) => break,
+                        Message::Close(_) => { peer_closed = true; break; },
                         _ => { shared.engine(Command::Alive(id)); None }
                     };
                     if let Some(reply) = reply && !send(&mut sink, &reply).await {
@@ -326,6 +327,13 @@ pub(crate) async fn run<S>(
     drop(conn);
     shared.emit(HostEvent::SessionsChanged);
     tracing::info!(session = id, "device disconnected");
+
+    if peer_closed {
+        // Reading Close queues tungstenite's reply. Flush it before dropping
+        // the socket, after session teardown has already queued key releases
+        // and cancelled actions, so a slow peer cannot hold input down.
+        let _ = timeout(SEND_TIMEOUT, sink.flush()).await;
+    }
 }
 
 /// `Err(None)` means the device went away; `Err(Some(m))` is a refusal.

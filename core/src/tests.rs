@@ -331,6 +331,60 @@ fn combos_from_the_wire_reach_the_engine_and_release_on_disconnect() {
 }
 
 #[test]
+fn client_close_completes_handshake_and_releases_held_ctrl() {
+    use crate::keycodes::KEY_CONTROL;
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+
+    let f = fixture();
+    let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        send(&mut ws, hello("closing-client", json!({"method": "pair", "code": code}))).await;
+        assert_eq!(recv(&mut ws).await["t"], "welcome");
+        send(&mut ws, json!({"t": "key", "code": KEY_CONTROL, "down": true})).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let held = f.recorder.0.lock().unwrap().iter().any(
+                    |event| matches!(event, Synth::Flags { code, flags } if *code == KEY_CONTROL && flags & flags::CONTROL != 0),
+                );
+                if held {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("Ctrl must be held before testing disconnect");
+
+        ws.close(Some(CloseFrame { code: CloseCode::Normal, reason: "Finished".into() })).await.unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .expect("server must acknowledge the client close")
+            .expect("server must send a close frame before ending the connection")
+            .expect("server must complete the WebSocket close handshake");
+        let Message::Close(Some(frame)) = reply else {
+            panic!("expected a close reply, got {reply:?}");
+        };
+        assert_eq!(frame.code, CloseCode::Normal);
+        assert_eq!(frame.reason, "Finished");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let released = f.recorder.0.lock().unwrap().iter().any(
+                    |event| matches!(event, Synth::Flags { code, flags } if *code == KEY_CONTROL && flags & flags::CONTROL == 0),
+                );
+                if released && f.host.connected_devices().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("client close must release Ctrl and remove the session");
+    });
+}
+
+#[test]
 fn approval_flow() {
     let f = fixture();
     f.rt.block_on(async {

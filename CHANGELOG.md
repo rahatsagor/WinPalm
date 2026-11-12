@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
+A redesigned Windows app with clearer pairing controls, grouped settings, and a consistent dark interface.
+
+### Windows app
+
+- Refresh every desktop page with a Windows 11-style dark theme, grouped settings cards, rounded surfaces, clearer typography, and scalable icons.
+- Make pairing easier to follow with a dedicated QR card, HTTP/HTTPS switcher, six-digit PIN countdown, and copyable phone browser address.
+- Add matching switches, segmented pickers, a port stepper, dark dialogs, a styled tray menu, and pairing approval prompts that appear without taking keyboard focus.
+- Guide HTTPS setup with certificate QR codes, phone-specific instructions, certificate export, and fingerprint copying.
+
+### Reliability
+
+- Lay out pages correctly on first launch and after reopening from the tray. Keep status badges, long device names, and dialog validation messages within their available space.
+- Initialize the port stepper safely before resizing and keep dynamic status rows sized to their current text and buttons.
+- Complete phone-initiated WebSocket disconnect handshakes while releasing held input and cancelling session actions.
+- Expand native UI and input self-tests to verify layout, key release, pause/resume, and disconnect behavior without counting queued key repeats as paused input.
+
 ## [0.2.0] - 2026-11-09
 
 Undo Deck edits, back up your phone's setup, and keep unsaved changes ready to retry. Sequences wait for opened apps, dictation replies stay with their recording, and waking a locked PC keeps control paused.

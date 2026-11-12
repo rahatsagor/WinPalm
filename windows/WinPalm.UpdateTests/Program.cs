@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using WinPalm.Services;
+using WinPalm.UI;
 
 if (args is ["--package", var archive, var architecture, var version])
 {
@@ -72,6 +73,8 @@ sealed class Tests
       Sync("app activation waits for the foreground confirmation", ActivationCompletion);
       Sync("app activation has a bounded timeout", ActivationTimeout);
       Sync("cancelled app activation stops waiting and cannot succeed", ActivationCancellation);
+      Sync("row header reserves status pill width before wrapping title", HeaderReservesPillWidth);
+      Sync("narrow row header stacks wide status pill below title without overflow", NarrowHeaderStacksPill);
     }
     finally { try { Directory.Delete(root, true); } catch { } }
     Console.WriteLine($"{passed} passed, {failed} failed");
@@ -466,6 +469,28 @@ sealed class Tests
   });
 
   private static string HashLine(byte[] bytes, string filename) => Convert.ToHexString(SHA256.HashData(bytes)) + "  " + filename;
+
+  private static void HeaderReservesPillWidth()
+  {
+    // Simulated 320px title wraps to 2 lines when a 90px pill + 8px gap reduces available width from 360px to 262px.
+    (int Width, int Height) Measure(int maxW) => maxW >= 320 ? (320, 18) : (maxW, 36);
+    var withoutPill = LayoutMath.MeasureHeader(360, 0, 20, 8, 4, 90, Measure);
+    var withPill = LayoutMath.MeasureHeader(360, 90, 20, 8, 4, 90, Measure);
+    Equal(18, withoutPill.HeaderHeight);
+    Equal(262, withPill.TitleMaxWidth);
+    False(withPill.PillBelowTitle);
+    Equal(36, withPill.HeaderHeight);
+  }
+
+  private static void NarrowHeaderStacksPill()
+  {
+    (int Width, int Height) Measure(int maxW) => (Math.Min(140, maxW), 18);
+    var stacked = LayoutMath.MeasureHeader(160, 95, 20, 8, 4, 90, Measure);
+    True(stacked.PillBelowTitle);
+    Equal(160, stacked.TitleMaxWidth);
+    Equal(42, stacked.HeaderHeight);
+  }
+
   private static string AssetUri(string tag, string name) => $"https://github.com/{ReleaseUpdates.Repository}/releases/download/{tag}/{name}";
   private static Uri ChecksumUri(string tag, string name) => new(AssetUri(tag, name));
 

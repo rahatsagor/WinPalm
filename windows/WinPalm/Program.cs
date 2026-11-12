@@ -8,6 +8,7 @@ internal static class Program
   private static int Main(string[] args)
   {
     ApplicationConfiguration.Initialize();
+    Application.SetColorMode(SystemColorMode.Dark);
     // A tray app should log a failed click handler, not show .NET's crash
     // dialog; actions that need attention already show their own message.
     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
