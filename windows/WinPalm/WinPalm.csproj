@@ -12,7 +12,7 @@
     <!-- Matches app.manifest, so WinForms and Windows agree on DPI handling. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>Resources\WinPalm.ico</ApplicationIcon>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Company>RS Application</Company>
     <Product>WinPalm</Product>
     <Copyright>Copyright © RS Application. AGPL-3.0-only.</Copyright>

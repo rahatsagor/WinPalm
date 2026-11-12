@@ -62,6 +62,41 @@ try {
 
     $App = Start-Process (Join-Path $Install 'WinPalm.exe') -ArgumentList '--start-minimized' -PassThru
     Require ($App.WaitForInputIdle(30000) -and !$App.HasExited) 'installed tray app starts'
+    $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $QuitName = 'Local\RSApplication.WinPalm.Quit.' + $Identity
+    $ReadyTimer = [Diagnostics.Stopwatch]::StartNew()
+    $QuitReady = $false
+    for ($Attempt = 0; $Attempt -lt 300 -and !$App.HasExited; $Attempt++) {
+        $QuitEvent = $null
+        if ([Threading.EventWaitHandle]::TryOpenExisting($QuitName, [ref]$QuitEvent)) {
+            $QuitEvent.Dispose()
+            $QuitReady = $true
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    $Report['quitEventReadyAfterMs'] = $ReadyTimer.ElapsedMilliseconds
+    Require $QuitReady 'installed tray app creates its installer quit event'
+    Write-Output 'Testing the quit helper directly'
+    $QuitTimer = [Diagnostics.Stopwatch]::StartNew()
+    $Helper = Start-Process (Join-Path $Install 'WinPalm.exe') -ArgumentList '--quit-for-install' -PassThru
+    Require ($Helper.WaitForExit(60000)) 'installer quit helper completes'
+    $Report['directQuitHelperExitCode'] = $Helper.ExitCode
+    $Report['directQuitHelperElapsedMs'] = $QuitTimer.ElapsedMilliseconds
+    Require ($Helper.ExitCode -eq 0 -and $App.WaitForExit(15000) -and $App.ExitCode -eq 0) 'installer quit helper gracefully closes the running tray app'
+    $App = Start-Process (Join-Path $Install 'WinPalm.exe') -ArgumentList '--start-minimized' -PassThru
+    Require ($App.WaitForInputIdle(30000) -and !$App.HasExited) 'tray app restarts before actual reinstall'
+    $QuitReady = $false
+    for ($Attempt = 0; $Attempt -lt 300 -and !$App.HasExited; $Attempt++) {
+        $QuitEvent = $null
+        if ([Threading.EventWaitHandle]::TryOpenExisting($QuitName, [ref]$QuitEvent)) {
+            $QuitEvent.Dispose()
+            $QuitReady = $true
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    Require $QuitReady 'restarted tray app is ready for setup'
     Install-Setup
     Require ($App.WaitForExit(15000) -and $App.ExitCode -eq 0) 'reinstall gracefully closes the running tray app'
     Require ((Get-Content $Marker -Raw) -eq $MarkerContents) 'reinstall preserves private app data'
@@ -83,6 +118,21 @@ try {
     $Report['error'] = $_.Exception.Message
     throw
 } finally {
+    if ($null -ne $App) {
+        $App.Refresh()
+        $Report['trayProcessExited'] = $App.HasExited
+        if ($App.HasExited) { $Report['trayProcessExitCode'] = $App.ExitCode }
+    }
+    $Log = Join-Path $Data 'WinPalm.log'
+    if (Test-Path $Log) { Copy-Item $Log (Join-Path $WorkDirectory 'installed-app.log') }
+    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = '.NET Runtime'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -like '*WinPalm*' } |
+        Select-Object TimeCreated, Id, Message |
+        Format-List | Out-File (Join-Path $WorkDirectory 'runtime-events.txt')
+    $Report['processesAfterCheck'] = @(Get-Process WinPalm -ErrorAction SilentlyContinue | ForEach-Object {
+        [ordered]@{ id = $_.Id; path = $_.Path; responding = $_.Responding }
+    })
+    $Report['installedFilesAfterCheck'] = @(Get-ChildItem $Install -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
     $Report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $WorkDirectory 'installer-check.json')
     if ($null -ne $App -and !$App.HasExited) { Stop-Process -Id $App.Id -Force }
 }

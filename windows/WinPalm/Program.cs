@@ -7,15 +7,17 @@ internal static class Program
   [STAThread]
   private static int Main(string[] args)
   {
-    ApplicationConfiguration.Initialize();
-    Application.SetColorMode(SystemColorMode.Dark);
     // A tray app should log a failed click handler, not show .NET's crash
     // dialog; actions that need attention already show their own message.
+    // Dark-mode initialization can create controls, so choose the exception
+    // mode before initializing any WinForms controls or application theme.
     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
     Application.ThreadException += (_, e) => Diagnostics.Record(e.Exception);
     AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception error) Diagnostics.Record(error); };
     try
     {
+      ApplicationConfiguration.Initialize();
+      Application.SetColorMode(SystemColorMode.Dark);
       if (args is ["--apply-update", var updateId]) return UpdateInstaller.Apply(updateId);
       if (args.Contains("--self-test")) return SelfTest.Run(args);
       if (args.Contains("--input-test")) return InputTest.Run(args);

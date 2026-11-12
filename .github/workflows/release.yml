@@ -130,7 +130,7 @@ jobs:
         if: always()
         with:
           name: winpalm-installer-check-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/installer-check/*.json
+          path: ${{ runner.temp }}/installer-check/*
           if-no-files-found: ignore
           retention-days: 7
 

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-12
+## [0.3.1] - 2026-11-12
 
 A redesigned Windows app with clearer pairing controls, grouped settings, and a consistent dark interface.
 
@@ -18,7 +18,12 @@ A redesigned Windows app with clearer pairing controls, grouped settings, and a 
 - Lay out pages correctly on first launch and after reopening from the tray. Keep status badges, long device names, and dialog validation messages within their available space.
 - Initialize the port stepper safely before resizing and keep dynamic status rows sized to their current text and buttons.
 - Complete phone-initiated WebSocket disconnect handshakes while releasing held input and cancelling session actions.
+- Keep startup and replacing a running app reliable when Windows setup launches WinPalm's quit helper.
 - Expand native UI and input self-tests to verify layout, key release, pause/resume, and disconnect behavior without counting queued key repeats as paused input.
+
+## [0.3.0] - 2026-11-12
+
+Unpublished candidate. Superseded by 0.3.1 after installer validation found a startup-order issue.
 
 ## [0.2.0] - 2026-11-09
 
