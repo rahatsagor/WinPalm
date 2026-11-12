@@ -169,11 +169,17 @@ internal static class SelfTest
         throw new InvalidOperationException("Short desktop page retained a stale scrollbar");
     }
 
-    hostForm.ClientSize = Theme.Px(800, 1800);
-    if (page.VerticalScroll.Visible || page.AutoScrollPosition != Point.Empty)
-      throw new InvalidOperationException("Desktop page scrollbar did not clear after enlarging the window");
+    // Stay within the runner's desktop bounds. WinForms clamps top-level
+    // windows to MaxWindowTrackSize, so an oversized form cannot prove this.
+    var resizedContent = LoadPage(300);
+    hostForm.ClientSize = Theme.Px(800, 240);
+    VerifyScrollable(resizedContent);
     hostForm.ClientSize = Theme.Px(800, 480);
-    VerifyScrollable(page.Controls[0]);
+    if (page.VerticalScroll.Visible || page.AutoScrollPosition != Point.Empty)
+      throw new InvalidOperationException($"Desktop page scrollbar did not clear after enlarging the window: viewport={page.ClientSize}, content={page.AutoScrollMinSize}, offset={page.AutoScrollPosition}");
+    hostForm.ClientSize = Theme.Px(800, 240);
+    VerifyScrollable(resizedContent);
+    hostForm.ClientSize = Theme.Px(800, 480);
 
     hostForm.Hide();
     _ = LoadPage(120);
