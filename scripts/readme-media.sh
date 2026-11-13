@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild the looping README previews from the reviewed 86-second launch film.
+# Rebuild README previews, poster and provenance from the reviewed 86-second launch film.
 # Needs ffmpeg and libwebp (img2webp).
 # Usage: scripts/readme-media.sh path/to/winpalm-launch.mp4
 set -euo pipefail
@@ -8,7 +8,7 @@ if [[ $# -ne 1 || ! -f "$1" ]]; then
   echo "usage: $0 <WinPalm launch film.mp4>" >&2
   exit 1
 fi
-for tool in ffmpeg img2webp; do
+for tool in ffmpeg img2webp python3; do
   command -v "$tool" >/dev/null || { echo "error: $tool not found" >&2; exit 1; }
 done
 SRC="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
@@ -48,3 +48,25 @@ deck 36.4 7
 apps-media 44.4 5
 voice 50.4 5
 CLIPS
+
+ffmpeg -nostdin -v error -y -ss 8 -i "$SRC" \
+  -frames:v 1 -vf 'scale=1280:-2:flags=lanczos' -q:v 2 "$OUT/film.jpg"
+
+# Record the master and output hashes so a release can check for stale previews.
+python3 - "$SRC" "$OUT" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+source, output = map(pathlib.Path, sys.argv[1:])
+digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+record = {
+    "sourceFile": source.name,
+    "sourceSha256": digest(source),
+    "posterSeconds": 8,
+    "outputs": {path.name: digest(path) for path in sorted(output.iterdir())
+                if path.suffix == ".webp" or path.name == "film.jpg"},
+}
+(output / "manifest.json").write_text(json.dumps(record, indent=2) + "\n")
+PY

@@ -65,6 +65,12 @@ keyboard and shortcut deck for Windows.<br />
 
 Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Closing the window keeps WinPalm in the notification area; reopen, pause or quit it from the tray. **Ctrl + Alt + Pause** toggles control when that shortcut is available.
 
+### New in 0.3.2
+
+The Windows app now has a redesigned dark interface with grouped settings, rounded cards and scalable icons. **Connect** puts the QR code, six-digit PIN countdown, copyable phone address and **Standard HTTP / Encrypted HTTPS** switcher together. **Phone setup** guides certificate installation with phone-specific instructions, a certificate QR code and fingerprint copying.
+
+The latest release also fixes desktop page scrolling after navigation, resizing and reopening from the tray, following startup and installer replacement fixes in 0.3.1. Your existing pairings, settings, custom keyboards and Deck pages are retained. See the [changelog](CHANGELOG.md) for release details.
+
 ### Windows download and installation warnings
 
 WinPalm is currently **unsigned**, so Windows cannot verify a trusted publisher signature. New or uncommon unsigned apps can trigger a warning in your browser while downloading and a separate Windows SmartScreen warning when opened. You may therefore see more than one confirmation.
@@ -84,7 +90,7 @@ These steps apply to unrecognized-app and reputation warnings. If a warning name
 
 Download the matching `win-x64.zip` or `win-arm64.zip` from [Releases](https://github.com/rahatsagor/WinPalm/releases/latest), extract the **whole ZIP** to a permanent folder and open `WinPalm.exe`. Keep `winpalm_core.dll`, `web/` and `Resources/` alongside it. Your architecture is listed in **Settings → System → About → System type**.
 
-If you used a private development preview, quit it and install 0.1.0 manually once. Preview version numbers do not follow the public release sequence. Existing private device data stays in the same per-user folder.
+If you used a private development preview, quit it and install the latest public release manually once. Preview version numbers do not follow the public release sequence. Existing private device data stays in the same per-user folder.
 
 </details>
 
@@ -147,7 +153,7 @@ Speak into your phone and let a compatible installed Windows recognizer type on 
 </tr>
 </table>
 
-<sub>Animated previews from the launch film: WinPalm phone UI with illustrated PC responses, without live Windows footage.</sub>
+<sub>Animated previews from the 0.3.2 launch film, including the redesigned Windows interface. Phone UI and illustrated PC responses; no live Windows footage.</sub>
 
 Pair multiple phones and tablets. Settings, custom keyboards and gestures are backed up on the PC for each device. **Copy settings from another device** lets you select individual settings sections and keyboards. Deck pages are shared across paired devices.
 
@@ -185,7 +191,7 @@ WinPalm runs with normal user permissions. UAC prompts, the lock screen and high
 
 WinPalm checks GitHub once a day for a newer stable release and shows a notification. Turn automatic checks off in General or Updates, or choose **Check for updates** from the tray.
 
-Choose **Download and restart** to verify the native package, replace the app and reopen it. Installed and portable copies use the same updater. Pairings, settings, Deck pages, custom keyboards and certificates are retained. Replacement failures, or a new process exiting before startup confirmation, restore the previous package.
+Choose **Download & restart** to verify the native package, replace the app and reopen it. Installed and portable copies use the same updater. Pairings, settings, Deck pages, custom keyboards and certificates are retained. Replacement failures, or a new process exiting before startup confirmation, restore the previous package.
 
 You can also download and run the latest **[WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** over your installation. Use this route for read-only, network or linked app folders, or when an in-app update is unavailable. Drafts and prereleases are excluded from automatic checks.
 
@@ -195,7 +201,7 @@ Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for 
 
 - **Phone cannot connect:** check the shared network, Windows Private profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
 - **Microphone unavailable:** export the public certificate from Phone setup, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
-- **Speech will not start:** choose **General → Check speech setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
+- **Speech will not start:** choose **General → Check setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
 - **Need a diagnostic report:** run **Test-WinPalm.cmd** from the app folder. Its disposable checks cover the native DLL, storage, icons, server, pairing and pause/revocation. The optional input test uses a temporary editor; leave the PC idle while it runs.
 
 Reports are saved to `%TEMP%\WinPalm-selftest.json` and `%TEMP%\WinPalm-input-test.json`. When [reporting a bug](https://github.com/rahatsagor/WinPalm/issues), include your Windows version, architecture, keyboard layout and phone/browser. Hardware and speech behavior require checks on the actual PC.
@@ -208,12 +214,14 @@ Install Git, **Bun**, stable Rust with the MSVC toolchain, the .NET SDK selected
 ./scripts/build.ps1 -Architecture x64 -Package
 ./scripts/build.ps1 -Architecture arm64 -Package
 # With NSIS 3.10+ installed, combine both native payloads into one setup:
-bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.1.0-Setup.exe
+bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.3.2-Setup.exe
 ```
 
 Builds, dependencies, caches and local reports go to `../winpalm-dev/`. The source repository contains the app, tests, packaging and public project documentation. Release assets are distributed through GitHub Releases. Each app package includes its corresponding source and licenses.
 
 Future releases follow CmdPalm's routine: update the changelog, run **`bun scripts/bump-version.ts VERSION`**, commit and push, then tag **`vVERSION`**. The release workflow runs native x64/ARM64 checks, builds setup, verifies checksums and publishes the release. See [CONTRIBUTING.md](CONTRIBUTING.md), [the release guide](docs/RELEASING.md) and [the protocol](docs/PROTOCOL.md).
+
+When the launch film changes, regenerate the README animations and poster with **`scripts/readme-media.sh ../winpalm-dev/launch-film/renders/winpalm-launch-VERSION.mp4`**. The generated [media manifest](docs/media/manifest.json) records the master and preview hashes. Publish the matching film and posters on the website together.
 
 ## License
 
