@@ -58,6 +58,8 @@ keyboard and shortcut deck for Windows.<br />
 
 ## Install and connect
 
+**[Download and illustrated installation guide →](https://winpalm.rsapplication.com/download/)**
+
 1. **[Download WinPalm-Setup.exe](https://github.com/rahatsagor/WinPalm/releases/latest/download/WinPalm-Setup.exe)** and run it. One installer chooses the native x64 or ARM64 app and includes its .NET runtime. No administrator access or separate runtime installation is needed.
 2. **Open WinPalm** from Start. Allow Windows Firewall on your **Private** home network, and keep your phone and PC on that network.
 3. **Scan the QR code** with your phone camera. You can also open the displayed address and enter its PIN, or request approval on the PC.
@@ -77,9 +79,44 @@ WinPalm is currently **unsigned**, so Windows cannot verify a trusted publisher 
 
 Continue only if you downloaded **WinPalm-Setup.exe** from the [official GitHub Releases](https://github.com/rahatsagor/WinPalm/releases/latest) and trust the project:
 
-1. **Browser download:** if Microsoft Edge says the file **isn't commonly downloaded**, choose **Keep**. If another confirmation appears, choose **Show more → Keep anyway**.
-2. **Windows launch:** open the downloaded installer. If SmartScreen shows **Windows protected your PC**, choose **More info → Run anyway**, if available.
-3. Finish the normal per-user installation and open WinPalm from Start.
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+**1. Keep the download**
+
+If your browser says the installer **isn't commonly downloaded**, choose **Keep**. In Microsoft Edge, you may also need **Show more → Keep anyway**.
+
+If there is no warning, open **WinPalm-Setup.exe** from your downloads.
+
+</td>
+<td width="50%"><img src="docs/media/install-keep.jpg" width="440" alt="Illustration of the browser download warning for WinPalm-Setup.exe, with Keep highlighted" /></td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+**2. Choose More info**
+
+Open the installer. If SmartScreen shows **Windows protected your PC**, select **More info** to show the app details.
+
+</td>
+<td width="50%"><img src="docs/media/install-more-info.jpg" width="440" alt="Illustration of Windows SmartScreen with More info highlighted" /></td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+**3. Run the installer**
+
+Check that the app is **WinPalm-Setup.exe**. The publisher will be listed as **Unknown publisher** because this release is unsigned.
+
+Choose **Run anyway**, if available, and follow the setup. Then open WinPalm from Start.
+
+</td>
+<td width="50%"><img src="docs/media/install-run-anyway.jpg" width="440" alt="Illustration of Windows SmartScreen showing WinPalm-Setup.exe and Unknown publisher, with Run anyway highlighted" /></td>
+</tr>
+</table>
+
+<sub>Illustrations only. Wording may vary by browser or Windows version. [View the full download guide →](https://winpalm.rsapplication.com/download/)</sub>
 
 These steps apply to unrecognized-app and reputation warnings. If a warning names a malware threat, stop and [report the exact detection](https://github.com/rahatsagor/WinPalm/issues). **Smart App Control or an organization policy can block unsigned apps without an individual override.** If **Run anyway** is unavailable, contact your administrator on a managed PC or wait for a signed release. We do not recommend disabling antivirus or Smart App Control. See [Microsoft's Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions) and the [installation guide](https://winpalm.rsapplication.com/docs/getting-started/#windows-download-and-installation-warnings).
 
