@@ -9,6 +9,12 @@ internal sealed class ApprovalWindow : Form
   private readonly string model;
   private readonly string address;
   private bool answered;
+  private readonly bool screenRequest;
+  private readonly Action<ulong, bool>? response;
+  private string Prompt => screenRequest ? $"Allow \"{deviceName}\" to view this PC's screen?" : $"Allow \"{deviceName}\" to control this PC?";
+  private string Detail => screenRequest
+      ? $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} could see anything shown on a selected monitor. Only allow devices you trust. This request expires after one minute."
+      : $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} is requesting access. Only allow devices you recognize.";
 
   protected override bool ShowWithoutActivation => true;
   protected override CreateParams CreateParams
@@ -21,14 +27,16 @@ internal sealed class ApprovalWindow : Form
     }
   }
 
-  internal ApprovalWindow(JsonElement request, int stackIndex = 0)
+  internal ApprovalWindow(JsonElement request, int stackIndex = 0, bool screenRequest = false, Action<ulong, bool>? response = null)
   {
+    this.screenRequest = screenRequest;
+    this.response = response;
     requestId = request.GetProperty("id").GetUInt64();
     deviceName = request.GetProperty("deviceName").GetString() ?? "New device";
     model = request.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
     address = request.GetProperty("address").GetString() ?? "";
 
-    Text = "WinPalm · Pairing request";
+    Text = screenRequest ? "WinPalm · Screen viewing request" : "WinPalm · Pairing request";
     FormBorderStyle = FormBorderStyle.None;
     ShowInTaskbar = false;
     TopMost = true;
@@ -43,15 +51,15 @@ internal sealed class ApprovalWindow : Form
     var textX = pad + Theme.Px(42) + Theme.Px(12);
     var textW = width - textX - pad;
 
-    var prompt = $"Allow \"{deviceName}\" to control this PC?";
-    var detail = $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} is requesting access. Only allow devices you recognize.";
+    var prompt = Prompt;
+    var detail = Detail;
     var promptH = Theme.MeasureText(prompt, Theme.Font(11f, true), textW).Height;
     var detailH = Theme.MeasureText(detail, Theme.Font(9f), textW).Height;
     var contentBottom = pad + Theme.Px(20) + promptH + Theme.Px(4) + detailH;
     var btnY = Math.Max(pad + Theme.Px(52), contentBottom) + Theme.Px(16);
 
     var deny = new PalmButton("Don't allow", () => Answer(false), ButtonTone.Secondary, compact: true) { BackColor = Theme.Surface };
-    var allow = new PalmButton("Allow device", () => Answer(true), ButtonTone.Primary, IconKind.Check, compact: true) { BackColor = Theme.Surface };
+    var allow = new PalmButton(screenRequest ? "Allow screen viewing" : "Allow device", () => Answer(true), ButtonTone.Primary, IconKind.Check, compact: true) { BackColor = Theme.Surface };
     deny.PerformAutoSize();
     allow.PerformAutoSize();
     allow.Location = new Point(width - pad - allow.Width, btnY);
@@ -88,19 +96,26 @@ internal sealed class ApprovalWindow : Form
     var textW = Width - textX - pad;
     var y = pad;
 
-    Theme.DrawText(g, "PAIRING REQUEST", Theme.Font(7.75f, true), new Rectangle(textX, y, textW, Theme.Px(16)), Theme.Accent, TextFormatFlags.Left | TextFormatFlags.SingleLine);
+    Theme.DrawText(g, screenRequest ? "SCREEN VIEWING REQUEST" : "PAIRING REQUEST", Theme.Font(7.75f, true), new Rectangle(textX, y, textW, Theme.Px(16)), Theme.Accent, TextFormatFlags.Left | TextFormatFlags.SingleLine);
     y += Theme.Px(18);
 
-    var prompt = $"Allow \"{deviceName}\" to control this PC?";
+    var prompt = Prompt;
     var pFont = Theme.Font(11f, true);
     var pSize = Theme.MeasureText(prompt, pFont, textW);
     Theme.DrawText(g, prompt, pFont, new Rectangle(textX, y, textW, pSize.Height + 2), Theme.Text);
     y += pSize.Height + Theme.Px(4);
 
-    var detail = $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} is requesting access. Only allow devices you recognize.";
+    var detail = Detail;
     Theme.DrawText(g, detail, Theme.Font(9f), new Rectangle(textX, y, textW, Height - y - pad), Theme.Muted);
   }
 
-  private void Answer(bool allow) { if (answered) return; answered = true; CoreBridge.TryCall(new { op = "approve", id = requestId, allow }); Close(); }
+  private void Answer(bool allow)
+  {
+    if (answered) return;
+    answered = true;
+    if (response is not null) response(requestId, allow);
+    else CoreBridge.TryCall(new { op = "approve", id = requestId, allow });
+    Close();
+  }
   internal void End() { answered = true; Close(); }
 }
