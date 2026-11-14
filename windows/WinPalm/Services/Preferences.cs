@@ -15,6 +15,7 @@ internal sealed class Preferences
   public bool AllowShell { get; set; }
   public bool AllowLocalProxy { get; set; }
   public bool Dictation { get; set; } = true;
+  public bool DisplayEnabled { get; set; }
   public bool TrayHintShown { get; set; }
   public bool CheckForUpdates { get; set; } = true;
   public DateTime LastUpdateCheckUtc { get; set; }

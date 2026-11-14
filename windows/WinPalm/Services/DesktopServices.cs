@@ -41,6 +41,7 @@ internal sealed class DesktopServices : IDisposable
     allowApproval = preferences.AllowApproval,
     allowShell = preferences.AllowShell,
     voiceAvailable = preferences.Dictation && SpeechService.Available,
+    displayEnabled = preferences.DisplayEnabled,
     loopbackOnly
   };
   internal object? Invoke(string op, JsonElement value) => op switch
