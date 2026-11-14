@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Windows app
+
+- Add optional screen viewing with DXGI Desktop Duplication capture and Media
+  Foundation H.264 encoding. WinPalm prefers a compatible hardware encoder and
+  falls back to the Windows software encoder when needed. Enable viewing in
+  General, then grant each device access in Devices or approve its native
+  request on the PC.
+- Capture and encoding stop when viewing ends, control is paused, the PC is
+  locked or asleep, the displays turn off, or access is revoked. No desktop
+  audio is captured and no screen recording is saved.
+- Refresh capture after monitor rotation, resolution or arrangement changes,
+  preserve the video clock during recovery, and stop if the selected monitor
+  disappears. Keep encoder timing aligned with adaptive capture frame rates.
+- Improve video pacing while WinPalm runs in the tray. Reuse resize plans and
+  picture buffers, update only the newest available desktop, and reuse the
+  resized background for separate cursor updates.
+- Add a synthetic H.264 encoder check to the native x64 and ARM64 self-test.
+  It verifies generated test pixels and does not capture a physical desktop or
+  validate a phone connection.
+
+### Phone client
+
+- Add a Display tab to view one PC monitor, above a trackpad or keyboard, or
+  beside controls on a wide screen. Choose a monitor, zoom the preview, move
+  the PC pointer to that monitor, and select motion, battery or text quality.
+- HD text sends lossless PNG pictures up to a 3840 × 2160 pixel budget, at up
+  to one update per second. Display preferences can be copied and backed up.
+- Fullscreen viewing hides input controls. Preview gestures stay on the phone,
+  and control mode and preview space can be adjusted from Display options.
+- Keep viewing active when Windows refreshes unrelated capabilities, including
+  foreground-app input permission. Opening Start or switching apps no longer
+  causes the phone to stop and refresh an unchanged display capability.
+
 ## [0.3.2] - 2026-11-12
 
 - Fix scrolling inside the Windows app after switching pages. Long pages show their scrollbar immediately, and shorter pages clear the previous scroll position.
