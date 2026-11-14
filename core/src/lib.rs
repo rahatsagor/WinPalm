@@ -9,11 +9,13 @@ pub mod api;
 pub mod auth;
 pub mod deck;
 mod display;
-#[cfg(test)]
+#[cfg(any(windows, test))]
 #[path = "display_windows/state.rs"]
 mod display_capture_state;
-#[cfg(test)]
+#[cfg(any(windows, test))]
 mod display_pixels;
+#[cfg(windows)]
+mod display_windows;
 pub mod ffi;
 pub mod host;
 pub mod input;

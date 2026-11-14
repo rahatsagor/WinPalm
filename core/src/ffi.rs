@@ -89,6 +89,11 @@ impl HostDelegate for Desktop {
         self.call::<Value>("voiceStop", json!({"session":session,"cancel":cancel}));
     }
     fn display_command(&self, session: u64, command: DisplayCommand) {
+        #[cfg(windows)]
+        if let Some(host) = HOST.lock().ok().and_then(|slot| slot.clone()) {
+            crate::display_windows::command(&host, session, command);
+        }
+        #[cfg(not(windows))]
         let _ = (session, command);
     }
 }
@@ -188,6 +193,16 @@ fn dispatch(request: Value) -> Result<Value, String> {
         "displayApprovals" => Ok(json!(host.pending_display_approvals())),
         "displayAwake" => {
             host.set_display_awake(request["awake"].as_bool().unwrap_or(false));
+            Ok(Value::Null)
+        }
+        #[cfg(windows)]
+        "displaysChanged" => {
+            crate::display_windows::displays_changed();
+            Ok(Value::Null)
+        }
+        #[cfg(windows)]
+        "displaySelfTest" => {
+            crate::display_windows::self_test()?;
             Ok(Value::Null)
         }
         "layout" => {
