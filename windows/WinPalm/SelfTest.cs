@@ -21,6 +21,8 @@ internal static class SelfTest
       CoreBridge.Call(new { op = "create", config = desktop.Config(loopbackOnly: true), dryRun = true });
       var port = CoreBridge.Call(new { op = "start" }).GetInt32();
       checks.Add("native DLL ABI and server start");
+      CoreBridge.Call(new { op = "displaySelfTest" });
+      checks.Add("synthetic Windows H.264 encoding and picture headers (no desktop capture)");
       CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); KeyboardLayouts.UpdateTiming(); checks.Add("Windows layout and input timing");
       if (System.Runtime.InteropServices.Marshal.SizeOf<Win32.Input>() != 40) throw new InvalidOperationException("Unexpected Win32 INPUT ABI size");
       VerifyDesktopUi(); checks.Add("desktop UI layout, stepper and badge wrapping");
@@ -55,7 +57,7 @@ internal static class SelfTest
       checks.Add("QR pairing and Windows welcome");
       CoreBridge.Call(new { op = "pause", paused = true }); CoreBridge.Call(new { op = "forgetAll" }); checks.Add("pause and device revocation");
       CoreBridge.Call(new { op = "stop" }); checks.Add("graceful shutdown");
-      Write(args, new { ok = true, checks, runtime = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), nativeInputTested = false });
+      Write(args, new { ok = true, checks, runtime = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), nativeInputTested = false, desktopCaptureTested = false, syntheticDisplayEncodingTested = true });
       return 0;
     }
     catch (Exception error) { Write(args, new { ok = false, checks, error = error.ToString() }); return 1; }
