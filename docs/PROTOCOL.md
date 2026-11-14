@@ -1,6 +1,7 @@
 # Wire protocol
 
-The phone app and the PC talk over one WebSocket. This page describes
+The phone app and the PC use a control WebSocket. Screen media uses a separate
+local WebRTC connection. This page describes
 protocol version **1**. The definitions live in
 [`core/src/protocol.rs`](../core/src/protocol.rs) and are mirrored in
 [`web/src/lib/protocol.ts`](../web/src/lib/protocol.ts).
@@ -85,7 +86,7 @@ On success the PC sends `welcome`:
 | `host` | `{name, version, os}`. |
 | `sessionKey` | Short-lived key for `/api/icon`. |
 | `token` | Present after a new pairing with `remember: true`. Store it and use it for `token` auth. |
-| `features` | `{voice, shell, secure, permission}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level. |
+| `features` | `{voice, shell, secure, permission, display, displayRequests, displayOriginal}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level, screen viewing enabled globally, native screen-access requests supported, lossless HD text supported. Display fields are absent on older hosts. They do not themselves grant this device screen access. |
 | `deck` | The current deck (see below). |
 | `deckRevision` | The revision of the current deck during this host run. Missing on older hosts. Send it with `deckSave` to avoid overwriting newer changes. |
 | `layout` | The PC's keyboard layout, if known. |
@@ -290,6 +291,69 @@ URL or shell command per action. App IDs and shortcut names are limited to
 and a symbol name to 128. `color` is `#rgb`, `#rgba`, `#rrggbb` or
 `#rrggbbaa`. The PC rejects a deck that breaks these limits, and the sender
 gets a `notice` explaining why.
+
+## Screen viewing
+
+Screen viewing extends protocol version 1. Send listing and media requests
+only to hosts advertising `features.display`; a false value means supported
+but disabled globally, and a missing field identifies an older host. A disabled
+host can answer listing requests with setup guidance. Access requests depend
+on `features.displayRequests` and remain available when global viewing is off.
+The browser receives video and does
+not need camera access, `getDisplayMedia`, WebCodecs, or a secure context.
+The PC captures monitors with DXGI Desktop Duplication and encodes video with
+Media Foundation H.264. It prefers a compatible hardware encoder and uses the
+Windows software encoder as a fallback. Screen audio is not captured. Media
+and pictures never enter the control WebSocket or a recording file.
+
+The General setting must enable screen viewing, and each device needs a
+separate screen-access grant in Devices. A phone can request approval when
+`features.displayRequests` is true, even when global viewing is disabled. Only
+the PC's native Allow action grants access. Requests expire after 60 seconds.
+Remembered grants are per device and reset on re-pairing. Temporary connections
+can receive access for their current session only. Phone messages never grant
+access by themselves.
+
+| Phone request | Fields | Meaning |
+| --- | --- | --- |
+| `displays` | `id` | Request the currently authorized display list. |
+| `displayAccessRequest` | `id` | Request native approval when `features.displayRequests` is true. |
+| `displayAccessCancel` | `id` | Cancel this session's matching pending request. |
+| `displayStart` | `id`, `displayId`, `quality`, `sdp` | Start a WebRTC offer for one listed display. `auto`, `battery`, and `sharp` use a receive-only video transceiver. `original` requires `features.displayOriginal` and uses a data channel. |
+| `displayAlive` | `id` | Renew the visible viewing lease. The PC ends it after four seconds without renewal. |
+| `displayStop` | `id` | Stop only the matching viewer owned by this session. |
+| `displayFocus` | `id` | Move the pointer to the selected monitor. Also requires Windows input permission. |
+
+| PC message | Fields | Meaning |
+| --- | --- | --- |
+| `displays` | `id`, `displays`, `canRequest`, optional `message` | Each source is `{id, name, width, height, main}`. IDs identify monitors; dimensions describe the source, not the scaled stream. Failures return an empty list and a message. `canRequest` permits showing the PC approval-request action. |
+| `displayAccess` | `allowed` | The PC changed this device's screen-access grant. Refresh the display list; do not start viewing automatically. |
+| `displayRequest` | `id`, `state`, optional `message` | `pending`, `allowed`, `denied`, `expired`, `cancelled`, or `error`. Approval enables listing, not automatic viewing. |
+| `displayState` | `id`, `state`, optional `sdp`, optional `message` | `connecting`, `answer` with SDP, `streaming`, `stopped`, or `error`. `streaming` means native capture was requested; the phone should wait for video playback before showing it as live. |
+
+The peer connection uses direct local IPv4/IPv6 ICE candidates, including
+usable VPN interfaces. WinPalm does not use
+external STUN/TURN services or cloud relays. A TCP-only reverse proxy cannot
+carry the media path, and the network or VPN must allow direct UDP traffic to
+the PC. WebRTC encrypts media automatically, but HTTP signaling remains
+vulnerable to on-path modification.
+
+Only one viewer can be active. Revocation, pause, lock, sleep, disconnect,
+expired lease, monitor removal, or capture failure ends that viewer. The phone
+tears down its peer and clears video on deactivation, hiding, or disconnect;
+resuming requires another View action. Selecting a monitor does not move the
+pointer. There is no desktop audio stream.
+
+HD text (`original`) uses an ordered reliable data channel named
+`cmdpalm.original`, protected by DTLS. The PC sends lossless PNG pictures at up
+to one update per second. The image is bounded to a 3840 × 2160 pixel budget,
+including portrait orientation, and is not upscaled. Each PNG is limited to
+16 MiB and sent in binary messages of at most 16 KiB. A 16-byte header contains
+`CPNG`, a u32 sequence, u32 total PNG length, and u32 byte offset, all integers
+little-endian. The phone validates ordering, bounds, PNG signature, and IHDR
+dimensions before decoding. The stream uses bounded buffering and stops if a
+picture transfer stalls. The same device grants, lease and stop controls apply
+to H.264 and HD text.
 
 ## Phone settings
 
