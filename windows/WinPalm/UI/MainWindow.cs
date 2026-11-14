@@ -20,12 +20,15 @@ internal sealed class MainWindow : Form
   private bool connectHttps;
   private bool quitting;
   private bool modalOpen;
+  private nint displayPowerNotification;
   private string lastDevicesDigest = "";
 
   // Connect live references
   private PageHeader? connectHeader;
   private PalmButton? connectPauseBtn;
   private PairingHeroCard? pairingCard;
+
+  private SettingToggleRow? displayToggle;
 
   // Advanced live references
   private SettingActionRow? serverStatusRow;
@@ -132,9 +135,20 @@ internal sealed class MainWindow : Form
   protected override void OnHandleCreated(EventArgs e)
   {
     base.OnHandleCreated(e);
+    host.DisplayPowerChanged(false);
+    var powerSetting = DisplayPower.Setting;
+    displayPowerNotification = DisplayPower.Register(Handle, ref powerSetting, 0);
+    if (displayPowerNotification == 0) Diagnostics.Record(new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
     Theme.ApplyWindowChrome(this, Theme.Sidebar, roundCorners: true);
     Rescale();
     page.Relayout();
+  }
+
+  protected override void OnHandleDestroyed(EventArgs e)
+  {
+    if (displayPowerNotification != 0) DisplayPower.Unregister(displayPowerNotification);
+    displayPowerNotification = 0;
+    base.OnHandleDestroyed(e);
   }
 
   protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -152,6 +166,8 @@ internal sealed class MainWindow : Form
   {
     if (installerQuitMessage != 0 && message.Msg == installerQuitMessage) { host.Quit(); return; }
     if (message.Msg == 0x312 && message.WParam == 1) host.TogglePause();
+    if (message.Msg == 0x218 && message.WParam == 0x8013 && DisplayPower.Read(message.LParam) is { } awake)
+      host.DisplayPowerChanged(awake);
     base.WndProc(ref message);
   }
 
@@ -178,6 +194,7 @@ internal sealed class MainWindow : Form
     connectHeader = null;
     connectPauseBtn = null;
     pairingCard = null;
+    displayToggle = null;
     serverStatusRow = null;
     startBtn = stopBtn = null;
     updateStatusRow = null;
@@ -341,6 +358,7 @@ internal sealed class MainWindow : Form
     var port = pairing.GetProperty("port").GetInt32();
 
     sidebar?.UpdateStatus(running, paused, count, port, host.Updates.Available is not null);
+    displayToggle?.SetChecked(host.Preferences.DisplayEnabled);
 
     if (section == "Connect" && pairingCard is not null && connectHeader is not null && connectPauseBtn is not null)
     {
@@ -391,7 +409,7 @@ internal sealed class MainWindow : Form
 
   private void BuildGeneral()
   {
-    page.AddBlock(new PageHeader("General", "Startup behavior, offline voice typing, app discovery, and Windows safety protections."));
+    page.AddBlock(new PageHeader("General", "Startup behavior, screen viewing, offline voice typing, and app discovery."));
 
     var startupCard = new SurfaceCard("Startup & Background", "WinPalm lives quietly in the notification area by the clock. Closing this window keeps phones connected.");
     SettingToggleRow? loginToggle = null;
@@ -415,6 +433,28 @@ internal sealed class MainWindow : Form
       IconKind.Updates,
       BadgeTone.Neutral));
     page.AddBlock(startupCard);
+
+    var displayCard = new SurfaceCard("Display", "View one PC monitor on your phone, with a trackpad or keyboard alongside it. Only explicitly allowed devices can view.");
+    displayToggle = new SettingToggleRow(
+      "Allow screen viewing",
+      "Enable the phone's Display tab. Each device also needs its own screen access grant in Devices.",
+      host.Preferences.DisplayEnabled,
+      value => Action(() => host.SetDisplayEnabled(value)),
+      IconKind.Connect,
+      BadgeTone.Accent);
+    displayCard.AddRow(displayToggle, dividerAbove: false);
+    displayCard.AddRow(new SettingActionRow(
+      "Choose which devices can view",
+      "Paired devices keep their grant until revoked or paired again. Temporary devices receive access only for their current connection.",
+      IconKind.Devices,
+      BadgeTone.Neutral,
+      actions: new PalmButton("Manage devices", () => Navigate("Devices"), ButtonTone.Secondary, IconKind.Devices, compact: true)));
+    displayCard.AddRow(new SettingActionRow(
+      "Viewing stops with you",
+      "Pausing, locking, sleeping, disconnecting, or leaving Display stops capture. Start viewing again when ready. No video is saved.",
+      IconKind.Shield,
+      BadgeTone.Neutral));
+    page.AddBlock(displayCard);
 
     var speechCard = new SurfaceCard("Local Voice Typing", "Audio from your phone's microphone streams over HTTPS and is transcribed offline on this PC.");
     speechCard.AddRow(new SettingToggleRow(
@@ -577,6 +617,13 @@ internal sealed class MainWindow : Form
           secure ? BadgeTone.Good : BadgeTone.Neutral,
           null,
           disconnectBtn), dividerAbove: i > 0);
+        if (!session.GetProperty("remembered").GetBoolean())
+          activeCard.AddRow(new SettingToggleRow(
+            "Allow screen viewing",
+            "Screen access for this temporary connection only.",
+            session.GetProperty("displayAllowed").GetBoolean(),
+            allowed => Action(() => { CoreBridge.Call(new { op = "sessionDisplayAllowed", id = sessionId, allowed }); host.RefreshSoon(); }),
+            IconKind.Shield, BadgeTone.Neutral));
       }
     }
     page.AddBlock(activeCard);
@@ -641,6 +688,12 @@ internal sealed class MainWindow : Form
           null,
           renameBtn,
           removeBtn), dividerAbove: i > 0);
+        trustedCard.AddRow(new SettingToggleRow(
+          "Allow screen viewing",
+          $"Let {name} view one monitor when screen viewing is enabled in General.",
+          device.GetProperty("displayAllowed").GetBoolean(),
+          allowed => Action(() => { CoreBridge.Call(new { op = "displayAllowed", deviceId = id, allowed }); host.RefreshSoon(); }),
+          IconKind.Shield, BadgeTone.Neutral));
       }
     }
     page.AddBlock(trustedCard, 0);
