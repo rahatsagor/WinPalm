@@ -8,6 +8,11 @@ mod actions;
 pub mod api;
 pub mod auth;
 pub mod deck;
+#[cfg(test)]
+#[path = "display_windows/state.rs"]
+mod display_capture_state;
+#[cfg(test)]
+mod display_pixels;
 pub mod ffi;
 pub mod host;
 pub mod input;
