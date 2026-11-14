@@ -16,6 +16,7 @@ internal sealed class HostContext : ApplicationContext
   private readonly NotifyIcon tray;
   private readonly System.Windows.Forms.Timer timer;
   private readonly Dictionary<ulong, ApprovalWindow> approvals = [];
+  private readonly Dictionary<ulong, ApprovalWindow> displayApprovals = [];
   /// Lock and sleep arrive on the SystemEvents thread, unlock on the UI thread.
   private readonly object lockGate = new();
   private readonly ControlPauseState automaticPause = new();
@@ -52,6 +53,7 @@ internal sealed class HostContext : ApplicationContext
     Updates.RestartRequested += Quit;
     if (!Win32.RegisterHotKey(window.Handle, 1, 0x4003, 0x13)) tray.ShowBalloonTip(5000, "WinPalm", "Ctrl + Alt + Pause is already used by another app. Pause is available in the tray menu.", ToolTipIcon.Info);
     SystemEvents.SessionSwitch += SessionChanged; SystemEvents.PowerModeChanged += PowerChanged;
+    SystemEvents.DisplaySettingsChanged += DisplaysChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
     Start(); CheckNetwork();
     timer = new System.Windows.Forms.Timer { Interval = 2000 }; timer.Tick += async (_, _) => await Poll(); timer.Start();
@@ -166,10 +168,76 @@ internal sealed class HostContext : ApplicationContext
       case "approvalEnded":
         if (approvals.Remove(value.GetProperty("id").GetUInt64(), out var ended)) { ended.End(); ended.Dispose(); }
         break;
+      case "displayApprovalRequested":
+      case "displayApprovalEnded":
+        try { SyncDisplayApprovals(); }
+        catch (Exception error)
+        {
+          Diagnostics.Record(error);
+          foreach (var prompt in displayApprovals.Values.ToArray()) { prompt.End(); prompt.Dispose(); }
+          displayApprovals.Clear();
+        }
+        break;
       case "failed": tray.ShowBalloonTip(8000, "WinPalm server", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Warning); break;
       case "notice": tray.ShowBalloonTip(5000, "WinPalm", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Info); break;
     }
     RefreshSoon();
+  }
+  private void SyncDisplayApprovals()
+  {
+    // Events may have been queued before a cancellation. Only show prompts
+    // still present in the core's authoritative, expiring request list.
+    var pending = CoreBridge.Call(new { op = "displayApprovals" }).EnumerateArray().ToArray();
+    var ids = pending.Select(request => request.GetProperty("id").GetUInt64()).ToHashSet();
+    foreach (var id in displayApprovals.Keys.Where(id => !ids.Contains(id)).ToArray())
+      if (displayApprovals.Remove(id, out var ended)) { ended.End(); ended.Dispose(); }
+    foreach (var request in pending)
+    {
+      var id = request.GetProperty("id").GetUInt64();
+      if (AutomaticallyPaused) { CoreBridge.TryCall(new { op = "displayApprove", id, allow = false }); continue; }
+      if (displayApprovals.ContainsKey(id)) continue;
+      var approval = new ApprovalWindow(request, approvals.Count + displayApprovals.Count, screenRequest: true, response: RespondDisplayApproval);
+      displayApprovals[id] = approval;
+      approval.Show();
+      tray.ShowBalloonTip(8000, "WinPalm screen viewing request", "A connected device is asking to view your screen. Review its name and address in WinPalm.", ToolTipIcon.Info);
+    }
+  }
+  private void RespondDisplayApproval(ulong id, bool allow)
+  {
+    var previous = Preferences.DisplayEnabled;
+    try
+    {
+      if (allow && !previous)
+      {
+        // Persist global opt-in before granting the phone access. A failed
+        // settings write must not leave behind an unnoticed device grant.
+        if (!CoreBridge.Call(new { op = "displayApprovals" }).EnumerateArray().Any(request => request.GetProperty("id").GetUInt64() == id)) return;
+        SetDisplayEnabled(true);
+      }
+      var valid = CoreBridge.Call(new { op = "displayApprove", id, allow }).GetBoolean();
+      if (!valid && allow && !previous) SetDisplayEnabled(false);
+    }
+    catch (Exception error)
+    {
+      CoreBridge.TryCall(new { op = "displayApprove", id, allow = false });
+      if (allow && !previous)
+        try { SetDisplayEnabled(false); } catch (Exception restoreError) { Diagnostics.Record(restoreError); }
+      Diagnostics.Record(error);
+      tray.ShowBalloonTip(8000, "WinPalm screen viewing", "The screen-viewing settings could not be saved. Check General and try again.", ToolTipIcon.Warning);
+    }
+    RefreshSoon();
+  }
+  internal void SetDisplayEnabled(bool enabled)
+  {
+    try
+    {
+      DisplayPreference.Apply(enabled, Preferences.DisplayEnabled,
+        value => Preferences.DisplayEnabled = value,
+        Preferences.Save,
+        () => { Services.Update(Preferences); CoreBridge.Call(new { op = "config", config = Services.Config() }); },
+        Diagnostics.Record);
+    }
+    finally { RefreshSoon(); }
   }
   private void SessionChanged(object sender, SessionSwitchEventArgs args)
   {
@@ -182,6 +250,19 @@ internal sealed class HostContext : ApplicationContext
     else if (args.Reason == SessionSwitchReason.RemoteConnect)
       OnWindowThread(() => ResumeControl(ControlPauseReason.SessionDisconnected));
   }
+  private void DisplaysChanged(object? sender, EventArgs args)
+  {
+    if (!quitting) CoreBridge.TryCall(new { op = "displaysChanged" });
+  }
+  internal void DisplayPowerChanged(bool awake)
+  {
+    lock (lockGate)
+    {
+      if (quitting) return;
+      automaticPause.DisplayAwake = awake;
+      CoreBridge.TryCall(new { op = "displayAwake", awake = automaticPause.CanView });
+    }
+  }
   private void PowerChanged(object sender, PowerModeChangedEventArgs args)
   {
     // Pause right away on suspend; a queued call might not run before sleep.
@@ -193,6 +274,7 @@ internal sealed class HostContext : ApplicationContext
     lock (lockGate)
     {
       if (quitting) return;
+      CoreBridge.TryCall(new { op = "displayAwake", awake = false });
       var paused = true; // A failed status read must never resume control later.
       try { paused = CoreBridge.Call(new { op = "status" }).GetProperty("paused").GetBoolean(); }
       catch (InvalidOperationException error) { Diagnostics.Record(error); }
@@ -205,6 +287,7 @@ internal sealed class HostContext : ApplicationContext
     {
       if (quitting) return;
       if (automaticPause.Resume(reason) is { } paused) CoreBridge.TryCall(new { op = "pause", paused });
+      CoreBridge.TryCall(new { op = "displayAwake", awake = automaticPause.CanView });
     }
     RefreshSoon();
   }
@@ -213,10 +296,13 @@ internal sealed class HostContext : ApplicationContext
     if (quitting) return; quitting = true; timer.Stop(); timer.Dispose();
     Updates.Dispose();
     SystemEvents.SessionSwitch -= SessionChanged; SystemEvents.PowerModeChanged -= PowerChanged;
+    SystemEvents.DisplaySettingsChanged -= DisplaysChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged -= NetworkAddressChanged;
     CoreBridge.Event = null; CoreBridge.TryCall(new { op = "pause", paused = true }); CoreBridge.TryCall(new { op = "stop" });
     foreach (var approval in approvals.Values.ToArray()) { approval.End(); approval.Dispose(); }
     approvals.Clear(); Win32.UnregisterHotKey(window.Handle, 1); tray.Visible = false; tray.Dispose();
+    foreach (var approval in displayApprovals.Values.ToArray()) { approval.End(); approval.Dispose(); }
+    displayApprovals.Clear();
     Services.Dispose(); window.Shutdown(); base.ExitThreadCore();
   }
 }
