@@ -12,6 +12,8 @@
     <Compile Include="../WinPalm/Services/PcmAudioStream.cs" Link="Services/PcmAudioStream.cs" />
     <Compile Include="../WinPalm/Services/ActivationWait.cs" Link="Services/ActivationWait.cs" />
     <Compile Include="../WinPalm/Services/ControlPauseState.cs" Link="Services/ControlPauseState.cs" />
+    <Compile Include="../WinPalm/Services/DisplayPreference.cs" Link="Services/DisplayPreference.cs" />
+    <Compile Include="../WinPalm/Services/DisplayPower.cs" Link="Services/DisplayPower.cs" />
     <Compile Include="../WinPalm/UI/LayoutMath.cs" Link="UI/LayoutMath.cs" />
   </ItemGroup>
 </Project>

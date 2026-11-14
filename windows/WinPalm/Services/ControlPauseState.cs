@@ -10,6 +10,9 @@ internal sealed class ControlPauseState
   private ControlPauseReason reasons;
   private bool previouslyPaused;
   internal bool Active => reasons != 0;
+  // Display power affects viewing independently of keyboard/trackpad control.
+  internal bool DisplayAwake { get; set; } = true;
+  internal bool CanView => DisplayAwake && !Active;
 
   internal bool Suspend(ControlPauseReason reason, bool paused)
   {

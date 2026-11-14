@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using WinPalm.Services;
 using WinPalm.UI;
 
@@ -70,6 +71,11 @@ sealed class Tests
       Sync("lock and sleep must each resume before control returns", OverlappingPauses);
       Sync("automatic pauses preserve an existing manual pause", ManualPauseSurvives);
       Sync("duplicate and unrelated resume events never enable control", UnmatchedResumes);
+      Sync("screen opt-in is saved before enable and revocation precedes storage", DisplayPreferenceOrdering);
+      Sync("screen preference storage failures never enable or undo revocation", DisplayPreferenceStorageFailure);
+      Sync("failed screen enable restores live and persisted preferences", DisplayPreferenceLiveFailure);
+      Sync("display power cannot bypass overlapping lock or sleep", DisplayPowerOverlaps);
+      Sync("display power notification validates setting length and state", DisplayPowerNotifications);
       Sync("app activation waits for the foreground confirmation", ActivationCompletion);
       Sync("app activation has a bounded timeout", ActivationTimeout);
       Sync("cancelled app activation stops waiting and cannot succeed", ActivationCancellation);
@@ -111,6 +117,91 @@ sealed class Tests
     True(state.Resume(ControlPauseReason.Sleep) is null); True(state.Active);
     Equal(false, state.Resume(ControlPauseReason.SessionLocked));
     True(state.Resume(ControlPauseReason.SessionLocked) is null);
+  }
+
+  private void DisplayPreferenceOrdering()
+  {
+    foreach (var enabled in new[] { true, false })
+    {
+      var preference = !enabled;
+      var live = !enabled;
+      var calls = new List<string>();
+      DisplayPreference.Apply(enabled, preference,
+        value => preference = value,
+        () => calls.Add($"saved:{preference}"),
+        () => { live = preference; calls.Add($"live:{live}"); },
+        error => throw new InvalidOperationException("Unexpected rollback", error));
+      Equal(enabled, preference); Equal(enabled, live);
+      Equal(enabled ? "saved:True,live:True" : "live:False,saved:False", string.Join(',', calls));
+    }
+  }
+
+  private void DisplayPreferenceStorageFailure()
+  {
+    foreach (var enabled in new[] { true, false })
+    {
+      var preference = !enabled;
+      var live = !enabled;
+      var reported = new List<Exception>();
+      Throws<IOException>(() => DisplayPreference.Apply(enabled, preference,
+        value => preference = value,
+        () => throw new IOException("Simulated unwritable settings"),
+        () => live = preference,
+        reported.Add));
+      False(preference); False(live);
+      Equal(enabled ? 1 : 0, reported.Count);
+    }
+  }
+
+  private void DisplayPreferenceLiveFailure()
+  {
+    var preference = false;
+    var stored = false;
+    var live = false;
+    Throws<InvalidOperationException>(() => DisplayPreference.Apply(true, preference,
+      value => preference = value,
+      () => stored = preference,
+      () => { if (preference) throw new InvalidOperationException("Simulated core failure"); live = preference; },
+      error => throw new Exception("Unexpected rollback failure", error)));
+    False(preference); False(stored); False(live);
+  }
+
+  private void DisplayPowerOverlaps()
+  {
+    var state = new ControlPauseState();
+    state.DisplayAwake = false;
+    False(state.Active); False(state.CanView);
+    True(state.Suspend(ControlPauseReason.SessionLocked, false));
+    state.DisplayAwake = true;
+    False(state.CanView);
+    True(state.Suspend(ControlPauseReason.Sleep, true));
+    state.DisplayAwake = false;
+    True(state.Resume(ControlPauseReason.Sleep) is null); False(state.CanView);
+    Equal(false, state.Resume(ControlPauseReason.SessionLocked));
+    False(state.Active); False(state.CanView);
+    state.DisplayAwake = true;
+    True(state.CanView);
+  }
+
+  private void DisplayPowerNotifications()
+  {
+    var pointer = Marshal.AllocHGlobal(24);
+    try
+    {
+      Equal(20, Marshal.SizeOf<DisplayPower.Header>());
+      Marshal.StructureToPtr(new DisplayPower.Header { Setting = DisplayPower.Setting, DataLength = 4 }, pointer, false);
+      foreach (var value in new[] { 0, 1, 2, 3 })
+      {
+        Marshal.WriteInt32(pointer, 20, value);
+        Equal(value == 0 ? false : value is 1 or 2 ? true : (bool?)null, DisplayPower.Read(pointer));
+      }
+      Marshal.StructureToPtr(new DisplayPower.Header { Setting = DisplayPower.Setting, DataLength = 1 }, pointer, false);
+      True(DisplayPower.Read(pointer) is null);
+      Marshal.StructureToPtr(new DisplayPower.Header { Setting = Guid.Empty, DataLength = 4 }, pointer, false);
+      True(DisplayPower.Read(pointer) is null);
+      True(DisplayPower.Read(0) is null);
+    }
+    finally { Marshal.FreeHGlobal(pointer); }
   }
 
   private void ActivationCompletion()
