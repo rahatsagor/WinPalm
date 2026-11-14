@@ -88,6 +88,9 @@ impl HostDelegate for Desktop {
     fn voice_stop(&self, session: u64, cancel: bool) {
         self.call::<Value>("voiceStop", json!({"session":session,"cancel":cancel}));
     }
+    fn display_command(&self, session: u64, command: DisplayCommand) {
+        let _ = (session, command);
+    }
 }
 
 /// # Safety
@@ -171,6 +174,20 @@ fn dispatch(request: Value) -> Result<Value, String> {
         }
         "approve" => {
             host.respond_approval(id(), request["allow"].as_bool().unwrap_or(false));
+            Ok(Value::Null)
+        }
+        "displayAllowed" => {
+            host.set_display_allowed(text("deviceId"), request["allowed"].as_bool().unwrap_or(false));
+            Ok(Value::Null)
+        }
+        "sessionDisplayAllowed" => {
+            host.set_session_display_allowed(id(), request["allowed"].as_bool().unwrap_or(false));
+            Ok(Value::Null)
+        }
+        "displayApprove" => Ok(json!(host.respond_display_approval(id(), request["allow"].as_bool().unwrap_or(false)))),
+        "displayApprovals" => Ok(json!(host.pending_display_approvals())),
+        "displayAwake" => {
+            host.set_display_awake(request["awake"].as_bool().unwrap_or(false));
             Ok(Value::Null)
         }
         "layout" => {

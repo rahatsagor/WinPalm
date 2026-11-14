@@ -28,6 +28,9 @@ pub struct HostConfig {
     pub allow_shell: bool,
     /// Whether the PC can transcribe speech streamed from the phone.
     pub voice_available: bool,
+    /// Screen viewing needs a separate explicit opt-in on the PC.
+    #[serde(default)]
+    pub display_enabled: bool,
     /// Listen on 127.0.0.1 only. The Windows self-tests use this so they
     /// don't trigger the firewall prompt or accept network connections.
     #[serde(default)]
@@ -78,6 +81,7 @@ pub struct ConnectedDevice {
     pub connected_at: i64,
     pub secure: bool,
     pub remembered: bool,
+    pub display_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,6 +91,17 @@ pub struct ApprovalRequest {
     pub device_name: String,
     pub model: String,
     pub address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayApprovalRequest {
+    pub id: u64,
+    pub session: u64,
+    pub device_name: String,
+    pub model: String,
+    pub address: String,
+    pub remembered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +123,12 @@ pub enum HostEvent {
     },
     /// The request was answered elsewhere or the device gave up.
     ApprovalEnded {
+        id: u64,
+    },
+    DisplayApprovalRequested {
+        request: DisplayApprovalRequest,
+    },
+    DisplayApprovalEnded {
         id: u64,
     },
     Paired {
@@ -160,6 +181,18 @@ pub trait HostDelegate: Send + Sync {
     /// 16 kHz mono signed 16-bit little-endian PCM.
     fn voice_audio(&self, session: u64, pcm: Vec<u8>);
     fn voice_stop(&self, session: u64, cancel: bool);
+    /// Queue capture work; capture and encoding never run on this callback.
+    fn display_command(&self, session: u64, command: DisplayCommand);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DisplayCommand {
+    List { request_id: u32 },
+    Start { generation: u64, display_id: String, max_dimension: u32, fps: u32, bitrate: u32, original: bool },
+    Configure { generation: u64, fps: u32, bitrate: u32 },
+    KeyFrame { generation: u64 },
+    Focus { generation: u64 },
+    Stop { generation: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

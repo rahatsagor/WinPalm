@@ -88,6 +88,7 @@ impl HostDelegate for Delegate {
     }
     fn voice_audio(&self, _session: u64, _pcm: Vec<u8>) {}
     fn voice_stop(&self, _session: u64, _cancel: bool) {}
+    fn display_command(&self, _: u64, _: winpalm_core::api::DisplayCommand) {}
 }
 
 fn main() {
@@ -110,6 +111,7 @@ fn main() {
         allow_shell: false,
         loopback_only: false,
         voice_available: false,
+        display_enabled: false,
     };
     let delegate = Arc::new(Delegate { volume: Mutex::new((0.5, false)), clipboard: Mutex::new(String::new()) });
     if live && !cfg!(windows) {

@@ -45,6 +45,7 @@ pub(crate) const STOPPED_SHARING: &str = "The PC stopped sharing.";
 
 pub(crate) struct LiveSession {
     pub info: ConnectedDevice,
+    pub display_epoch: u64,
     /// Authorizes HTTP requests (app icons) made on behalf of this session.
     pub key: String,
     pub tx: mpsc::UnboundedSender<Outgoing>,
@@ -78,6 +79,7 @@ pub(crate) struct Voices {
 }
 
 pub(crate) struct Shared {
+    pub displays: crate::display::DisplayHub,
     pub config: RwLock<HostConfig>,
     pub delegate: Arc<dyn HostDelegate>,
     pub engine: Mutex<Sender<Command>>,
@@ -121,6 +123,7 @@ impl Shared {
         }
         let deck = dir.as_ref().and_then(|d| load_deck(&d.join("deck.json"))).unwrap_or_default();
         Self {
+            displays: crate::display::DisplayHub::default(),
             config: RwLock::new(config),
             delegate,
             engine: Mutex::new(engine.sender()),
@@ -262,7 +265,15 @@ impl Shared {
 
     pub fn features(&self, secure: bool) -> Features {
         let config = self.config();
-        Features { voice: config.voice_available, shell: config.allow_shell, secure, permission: (self.permission)() }
+        Features {
+            voice: config.voice_available,
+            shell: config.allow_shell,
+            secure,
+            permission: (self.permission)(),
+            display: config.display_enabled,
+            display_requests: true,
+            display_original: true,
+        }
     }
 
     pub fn data_dir(&self) -> Option<PathBuf> {
@@ -401,10 +412,15 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
 /// belongs to a VPN.
 #[cfg(windows)]
 fn network_addresses() -> Vec<(IpAddr, bool)> {
+    network_adapters(false)
+}
+
+#[cfg(windows)]
+fn network_adapters(include_ipv6: bool) -> Vec<(IpAddr, bool)> {
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
     use windows_sys::Win32::NetworkManagement::IpHelper::*;
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
-    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6};
 
     fn wide(text: *const u16) -> String {
         if text.is_null() {
@@ -427,7 +443,13 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
         buffer.resize((size as usize).div_ceil(8), 0);
         // SAFETY: the buffer is 8-byte aligned and `size` bytes long.
         result = unsafe {
-            GetAdaptersAddresses(AF_INET as u32, flags, std::ptr::null(), buffer.as_mut_ptr().cast(), &mut size)
+            GetAdaptersAddresses(
+                if include_ipv6 { AF_UNSPEC } else { AF_INET } as u32,
+                flags,
+                std::ptr::null(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
         };
         if result != ERROR_BUFFER_OVERFLOW {
             break;
@@ -456,14 +478,29 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
             while let Some(address) = unicast.as_ref() {
                 unicast = address.Next;
                 let socket = address.Address.lpSockaddr;
-                if socket.is_null() || (*socket).sa_family != AF_INET {
+                if socket.is_null() {
                     continue;
                 }
-                let v4 = std::net::Ipv4Addr::from(u32::from_be((*socket.cast::<SOCKADDR_IN>()).sin_addr.S_un.S_addr));
-                if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() {
-                    continue;
-                }
-                found.push((rank, current.Ipv4Metric, IpAddr::V4(v4), vpn));
+                let (ip, metric) = match (*socket).sa_family {
+                    AF_INET => {
+                        let ip = std::net::Ipv4Addr::from(u32::from_be(
+                            (*socket.cast::<SOCKADDR_IN>()).sin_addr.S_un.S_addr,
+                        ));
+                        if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() {
+                            continue;
+                        }
+                        (IpAddr::V4(ip), current.Ipv4Metric)
+                    }
+                    AF_INET6 if include_ipv6 => {
+                        let ip = std::net::Ipv6Addr::from((*socket.cast::<SOCKADDR_IN6>()).sin6_addr.u.Byte);
+                        if ip.is_loopback() || ip.is_unicast_link_local() || ip.is_unspecified() || ip.is_multicast() {
+                            continue;
+                        }
+                        (IpAddr::V6(ip), current.Ipv6Metric)
+                    }
+                    _ => continue,
+                };
+                found.push((rank, metric, ip, vpn));
             }
         }
     }
@@ -475,6 +512,19 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
 /// LAN addresses a phone can reach, Wi-Fi and Ethernet first.
 pub fn lan_addresses() -> Vec<IpAddr> {
     network_addresses().into_iter().map(|(ip, _)| ip).collect()
+}
+
+/// Media ICE candidates also include usable IPv6 and VPN interfaces. Pairing
+/// keeps its existing IPv4 address preference and URL representation.
+pub(crate) fn media_addresses() -> Vec<IpAddr> {
+    #[cfg(windows)]
+    {
+        network_adapters(true).into_iter().map(|(ip, _)| ip).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        if_addrs::get_if_addrs().unwrap_or_default().into_iter().map(|interface| interface.ip()).collect()
+    }
 }
 
 /// Plain and encrypted base URLs for an address typed by hand. A bare host
@@ -545,6 +595,8 @@ impl CoreHost {
     }
 
     fn close_sessions(&self, reason: &str, reconnect: bool) {
+        self.shared.displays.cancel_access(&self.shared, None, None, "cancelled", reason);
+        self.shared.displays.cancel(&self.shared, None, None, reason);
         let sessions: Vec<_> = self.shared.state().sessions.values().map(|s| s.tx.clone()).collect();
         for tx in sessions {
             let _ = tx.send(Outgoing::Close { reason: reason.into(), reconnect });
@@ -552,6 +604,17 @@ impl CoreHost {
     }
 
     fn close_device(&self, device_id: &str, reason: &str) {
+        let ids: Vec<_> = self
+            .shared
+            .state()
+            .sessions
+            .values()
+            .filter(|s| s.info.device_id == device_id)
+            .map(|s| s.info.session)
+            .collect();
+        for id in ids {
+            self.shared.displays.forget(&self.shared, id);
+        }
         let sessions: Vec<_> = self
             .shared
             .state()
@@ -680,13 +743,33 @@ impl CoreHost {
         if previous.voice_available && !config.voice_available {
             self.shared.cancel_voices();
         }
-        if previous.allow_shell != config.allow_shell || previous.voice_available != config.voice_available {
+        if previous.display_enabled && !config.display_enabled {
+            self.shared.displays.cancel_access(
+                &self.shared,
+                None,
+                None,
+                "cancelled",
+                "Screen viewing was turned off on the PC.",
+            );
+            self.shared.displays.cancel(&self.shared, None, None, "Screen viewing was turned off on the PC.");
+        }
+        if previous.allow_shell != config.allow_shell
+            || previous.voice_available != config.voice_available
+            || previous.display_enabled != config.display_enabled
+        {
             let permission = (self.shared.permission)();
             let sessions: Vec<_> =
                 self.shared.state().sessions.values().map(|s| (s.tx.clone(), s.info.secure)).collect();
             for (tx, secure) in sessions {
-                let features =
-                    Features { voice: config.voice_available, shell: config.allow_shell, secure, permission };
+                let features = Features {
+                    voice: config.voice_available,
+                    shell: config.allow_shell,
+                    secure,
+                    permission,
+                    display: config.display_enabled,
+                    display_requests: true,
+                    display_original: true,
+                };
                 let _ = tx.send(Outgoing::Message(ServerMessage::Features { features }));
             }
         }
@@ -809,6 +892,7 @@ impl CoreHost {
     }
 
     pub fn disconnect(&self, session: u64) {
+        self.shared.displays.forget(&self.shared, session);
         if let Some(live) = self.shared.state().sessions.get(&session) {
             let _ = live.tx.send(Outgoing::Close { reason: "Disconnected from the PC.".into(), reconnect: false });
         }
@@ -837,6 +921,14 @@ impl CoreHost {
         self.shared.engine(Command::SetPaused(paused));
         self.shared.broadcast(ServerMessage::Paused { paused });
         if paused {
+            self.shared.displays.cancel_access(
+                &self.shared,
+                None,
+                None,
+                "cancelled",
+                "Screen viewing is paused on the PC.",
+            );
+            self.shared.displays.cancel(&self.shared, None, None, "Screen viewing is paused on the PC.");
             self.shared.cancel_voices();
         }
     }
@@ -892,9 +984,142 @@ impl CoreHost {
         let config = self.shared.config();
         let sessions: Vec<_> = self.shared.state().sessions.values().map(|s| (s.tx.clone(), s.info.secure)).collect();
         for (tx, secure) in sessions {
-            let features = Features { voice: config.voice_available, shell: config.allow_shell, secure, permission };
+            let features = Features {
+                voice: config.voice_available,
+                shell: config.allow_shell,
+                secure,
+                permission,
+                display: config.display_enabled,
+                display_requests: true,
+                display_original: true,
+            };
             let _ = tx.send(Outgoing::Message(ServerMessage::Features { features }));
         }
+    }
+
+    /// Only native Windows settings can grant this capability. An unremembered
+    /// connection claiming the same device ID never inherits a stored grant.
+    pub fn set_display_allowed(&self, id: String, allowed: bool) {
+        let sessions = {
+            let mut state = self.shared.state();
+            state.trust.set_display_allowed(&id, allowed);
+            state
+                .sessions
+                .values_mut()
+                .filter(|s| s.info.device_id == id && s.info.remembered)
+                .map(|s| {
+                    s.info.display_allowed = allowed;
+                    if !allowed {
+                        s.display_epoch = s.display_epoch.wrapping_add(1);
+                    }
+                    s.info.session
+                })
+                .collect::<Vec<_>>()
+        };
+        if !allowed {
+            for session in &sessions {
+                self.shared.displays.forget(&self.shared, *session);
+            }
+        }
+        for session in sessions {
+            if allowed {
+                self.shared.displays.cancel_access(
+                    &self.shared,
+                    Some(session),
+                    None,
+                    "allowed",
+                    "Screen viewing was allowed on the PC.",
+                );
+            }
+            self.shared.send_to(session, ServerMessage::DisplayAccess { allowed });
+        }
+        self.shared.save_trust();
+        self.shared.emit(HostEvent::DevicesChanged);
+    }
+
+    pub fn set_session_display_allowed(&self, session: u64, allowed: bool) {
+        let changed = {
+            let mut state = self.shared.state();
+            if let Some(live) = state.sessions.get_mut(&session).filter(|s| !s.info.remembered) {
+                live.info.display_allowed = allowed;
+                if !allowed {
+                    live.display_epoch = live.display_epoch.wrapping_add(1);
+                }
+                true
+            } else {
+                false
+            }
+        };
+        if !changed {
+            return;
+        }
+        if !allowed {
+            self.shared.displays.forget(&self.shared, session);
+        }
+        self.shared.send_to(session, ServerMessage::DisplayAccess { allowed });
+        if allowed {
+            self.shared.displays.cancel_access(
+                &self.shared,
+                Some(session),
+                None,
+                "allowed",
+                "Screen viewing was allowed on the PC.",
+            );
+        }
+        self.shared.emit(HostEvent::SessionsChanged);
+    }
+
+    pub fn display_sources(
+        &self,
+        session: u64,
+        request_id: u32,
+        displays: Vec<crate::protocol::DisplayInfo>,
+        message: Option<String>,
+    ) {
+        self.shared.displays.sources(&self.shared, session, request_id, displays, message);
+    }
+
+    pub fn respond_display_approval(&self, id: u64, allow: bool) -> bool {
+        self.shared.displays.respond_access(&self.shared, id, allow)
+    }
+
+    pub fn pending_display_approvals(&self) -> Vec<crate::api::DisplayApprovalRequest> {
+        self.shared.displays.pending_access()
+    }
+
+    pub fn set_display_awake(&self, awake: bool) {
+        self.shared.displays.set_awake(&self.shared, awake);
+    }
+
+    pub fn display_frame(
+        &self,
+        session: u64,
+        generation: u64,
+        data: Vec<u8>,
+        timestamp_us: u64,
+        keyframe: bool,
+    ) -> bool {
+        self.shared.displays.frame(&self.shared, session, generation, data, timestamp_us, keyframe)
+    }
+
+    pub fn display_capture_active(&self, session: u64, generation: u64) -> bool {
+        self.shared.displays.capture_active(&self.shared, session, generation)
+    }
+
+    pub fn display_failed(&self, session: u64, generation: u64, message: String) {
+        self.shared.displays.failed(&self.shared, session, generation, &message);
+    }
+
+    /// Lock, sleep, or native permission revocation ends viewing without
+    /// preventing the existing input controls from reconnecting afterward.
+    pub fn suspend_display(&self) {
+        self.shared.displays.cancel_access(&self.shared, None, None, "cancelled", "Screen viewing stopped on the PC.");
+        self.shared.displays.cancel(
+            &self.shared,
+            None,
+            None,
+            "Screen viewing stopped on the PC. Unlock or wake the PC, then start viewing again.",
+        );
     }
 
     pub fn voice_update(&self, session: u64, update: VoiceUpdate) {
