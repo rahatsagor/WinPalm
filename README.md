@@ -7,7 +7,7 @@
 ### Your PC, in your palm.
 
 Turn your iPhone, iPad or Android phone into a wireless mouse, trackpad,<br />
-keyboard and shortcut deck for Windows.<br />
+keyboard, shortcut deck and live screen viewer for Windows.<br />
 **No phone app. No account. Your controls stay on your network.**
 
 <br />
@@ -205,6 +205,42 @@ For slides, use large arrow keys. For games, make a WASD layout. For movie night
 <sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 86-second film on winpalm.rsapplication.com</a></sub>
 
 </div>
+
+## View your PC screen
+
+The phone's **Display** tab can show one monitor on its own, above the
+trackpad or keyboard, or beside the controls when the screen is wide enough.
+
+1. In WinPalm on the PC, open **Settings → General → Display** and turn on
+   **Allow screen viewing**.
+2. In **Settings → Devices**, enable **Allow screen viewing** for the phone.
+   A temporary connection can be allowed for that connection only.
+3. On the phone, open **Display**, choose a monitor and tap **View**.
+
+You can also tap **Ask PC to allow viewing** on the phone. Someone at the PC
+must approve the native request. Approval enables that device's access, but
+does not start viewing automatically. Requests expire after one minute.
+
+Pinch or drag a zoomed preview to look around without moving the PC pointer.
+Use **Pointer here** to move it to the selected monitor. Fullscreen viewing
+hides the input controls. Display options include Auto, Save battery, Sharper
+text, HD text and preview space. HD text preserves picture detail with PNG up
+to a 3840 × 2160 pixel budget, including portrait displays, and updates at up
+to one picture per second. It uses more bandwidth and memory. No desktop audio
+is captured, and no screen recording is saved.
+
+The PC captures through DXGI Desktop Duplication and encodes video with Media
+Foundation H.264. It prefers a compatible hardware encoder and falls back to
+the Windows software encoder. Video and HD pictures travel directly over an
+encrypted WebRTC connection on your local network. No cloud relay is used,
+and the phone does not need a secure context for video. Direct UDP traffic to
+the PC must be allowed by your network or VPN. Use HTTPS to protect the page,
+control connection and signaling as well.
+
+Leaving Display, hiding the phone page, pausing control, locking or sleeping
+the PC, turning off its displays, disconnecting, or revoking access stops
+viewing. Start again when ready.
+
 
 ## Private by design
 
