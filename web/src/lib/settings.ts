@@ -35,6 +35,10 @@ export interface Settings {
   sidewaysKeyboard: boolean
   /** Which way the phone is turned to read it. */
   sidewaysTurn: 'left' | 'right'
+  displayControls: 'view' | 'trackpad' | 'keyboard'
+  displayQuality: 'auto' | 'battery' | 'sharp' | 'original'
+  displaySplit: number
+  displayId: string
   keyRepeat: boolean
   /** Opt in to one-finger shortcut latches; normal keys press and release. */
   stickyModifiers: boolean
@@ -105,6 +109,10 @@ export function defaultSettings(): Settings {
     functionRow: 'media',
     sidewaysKeyboard: false,
     sidewaysTurn: 'left',
+    displayControls: 'trackpad',
+    displayQuality: 'auto',
+    displaySplit: 0.48,
+    displayId: '',
     keyRepeat: true,
     stickyModifiers: false,
     textMode: 'unicode',
@@ -141,6 +149,8 @@ const CHOICES: Partial<Record<keyof Settings, readonly string[]>> = {
   keyboard: ['auto', 'pc', 'custom', 'phone'],
   functionRow: ['media', 'function'],
   sidewaysTurn: ['left', 'right'],
+  displayControls: ['view', 'trackpad', 'keyboard'],
+  displayQuality: ['auto', 'battery', 'sharp', 'original'],
   textMode: ['unicode', 'keystrokes', 'paste'],
   theme: ['system', 'dark', 'light'],
   tab: ['trackpad', 'keyboard', 'deck', 'apps', 'media'],
@@ -176,6 +186,7 @@ export function migrate(raw: unknown): Settings {
   out.pointerAcceleration = clamp(out.pointerAcceleration, 0, 1, defaults.pointerAcceleration)
   out.scrollSpeed = clamp(out.scrollSpeed, 0.2, 4, defaults.scrollSpeed)
   out.deckButtonSize = clamp(out.deckButtonSize, DECK_SIZE.min, DECK_SIZE.max, defaults.deckButtonSize)
+  out.displaySplit = clamp(out.displaySplit, 0.3, 0.7, defaults.displaySplit)
   // Up to 0.3.0, one setting held both the side and whether the strip showed.
   const legacy = (raw as { scrollRail?: unknown }).scrollRail
   if (stored.scrollStrip === undefined && legacy === 'off') out.scrollStrip = 'off'
