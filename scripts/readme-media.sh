@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild README previews, poster and provenance from the reviewed 86-second launch film.
+# Rebuild README previews, poster and provenance from the reviewed 101-second launch film.
 # Needs ffmpeg and libwebp (img2webp).
 # Usage: scripts/readme-media.sh path/to/winpalm-launch.mp4
 set -euo pipefail
@@ -19,37 +19,37 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT"
 
 encode() {
-  img2webp -loop 0 -min_size -lossy -q "$2" -m 6 -d 83 "$WORK/$1"/f*.png -o "$OUT/$1.webp" >/dev/null 2>&1
+  img2webp -loop 0 -kmin 0 -kmax 1 -sharp_yuv -lossy -q "$2" -m 4 -exact -d 83 "$WORK/$1"/f*.png -o "$OUT/$1.webp" >/dev/null 2>&1
   echo "$1.webp: $(wc -c < "$OUT/$1.webp") bytes"
 }
 
-# A short four-feature montage at the same size/frame rate as CmdPalm's hero.
+# A short screen-mirroring-first montage at the same size/frame rate as CmdPalm's hero.
 mkdir -p "$WORK/hero"
 ffmpeg -nostdin -v error -y \
-  -ss 12.6 -t 4.4 -i "$SRC" \
-  -ss 22.6 -t 3.2 -i "$SRC" \
-  -ss 36.6 -t 3.2 -i "$SRC" \
-  -ss 50.6 -t 3.4 -i "$SRC" \
-  -filter_complex "[0:v][1:v][2:v][3:v]concat=n=4:v=1:a=0,fps=12,scale=800:-2:flags=lanczos[v]" \
+  -ss 6.6 -t 6.6 -i "$SRC" \
+  -ss 46.6 -t 2.5 -i "$SRC" \
+  -ss 60.6 -t 2.5 -i "$SRC" \
+  -filter_complex "[0:v][1:v][2:v]concat=n=3:v=1:a=0,fps=12,scale=800:-2:flags=lanczos[v]" \
   -map '[v]' -threads 2 "$WORK/hero/f%04d.png"
-encode hero 52
+encode hero 65
 
 # Keep each loop inside its chapter, clear of the next scene's transition.
 while read -r name start duration; do
   mkdir -p "$WORK/$name"
   ffmpeg -nostdin -v error -y -ss "$start" -t "$duration" -i "$SRC" \
     -vf 'fps=12,scale=480:-2:flags=lanczos' -threads 2 "$WORK/$name/f%04d.png"
-  encode "$name" 55
+  encode "$name" 65
 done <<'CLIPS'
-trackpad 12.4 9
-keyboard 22.4 7
-custom 30.4 5
-deck 36.4 7
-apps-media 44.4 5
-voice 50.4 5
+display 32.4 7
+trackpad 14.4 9
+keyboard 24.4 7
+custom 40.4 5
+deck 46.4 7
+apps-media 54.4 5
+voice 60.4 5
 CLIPS
 
-ffmpeg -nostdin -v error -y -ss 8 -i "$SRC" \
+ffmpeg -nostdin -v error -y -ss 12.5 -i "$SRC" \
   -frames:v 1 -vf 'scale=1280:-2:flags=lanczos' -q:v 2 "$OUT/film.jpg"
 
 # Record the master and output hashes so a release can check for stale previews.
@@ -64,7 +64,7 @@ digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 record = {
     "sourceFile": source.name,
     "sourceSha256": digest(source),
-    "posterSeconds": 8,
+    "posterSeconds": 12.5,
     "outputs": {path.name: digest(path) for path in sorted(output.iterdir())
                 if path.suffix == ".webp" or path.name == "film.jpg"},
 }
