@@ -34,6 +34,15 @@
 - Keep viewing active when Windows refreshes unrelated capabilities, including
   foreground-app input permission. Opening Start or switching apps no longer
   causes the phone to stop and refresh an unchanged display capability.
+- Preserve newly started views through repeated access grants and delayed
+  approval refreshes, and allow a failed display-list send to be retried.
+- Keep hidden controls out of keyboard navigation during fullscreen viewing,
+  including responsive layout changes, and restore focus on exit.
+- Use matching up/down chevrons at every scroll-strip width and increase the
+  short handle to 112px.
+- Cancel scroll-strip end-hold, repeating media keys, held touch controls and
+  trackpad drag lock when control pauses, so old gestures cannot resume when
+  control is restored.
 
 ## [0.3.2] - 2026-11-12
 

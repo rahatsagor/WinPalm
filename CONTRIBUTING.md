@@ -63,6 +63,16 @@ cargo run -p winpalm-core --example display-smoke
 Set `WINPALM_DISPLAY_FEATURE_REFRESH_MS=2000` to reproduce the capability
 updates Windows sends as foreground apps change. A live viewer must continue
 playing through these updates for at least 30 seconds, with its lease intact.
+Check repeated access-grant messages and delayed approval refreshes as well;
+neither may interrupt a newly started view. In fullscreen, rotate between
+portrait and landscape and use a hardware keyboard to enter, navigate and exit.
+Hidden app navigation must stay inaccessible and work again after Exit or Stop.
+
+Windows capture runs on one serialized worker, with a coalesced monitor-change
+flag and a synchronous generation gate. Unlike an asynchronous capture startup,
+monitor queries cannot overlap that worker's startup or teardown. Exercise rapid
+start/stop, monitor changes and a late failure from an older generation; it must
+not cancel a replacement viewer, even if the client reused its request ID.
 
 Open the printed pairing URL in a browser on the same PC. `WINPALM_PORT=0`
 selects an available port. `WINPALM_DISPLAY_IMAGE` is optional and is used
