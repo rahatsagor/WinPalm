@@ -65,4 +65,43 @@ describe('MediaView', () => {
     expect(mediaSent(socket)).toEqual(['rewind down', 'rewind up'])
     view.unmount()
   })
+
+  it('stops repeating media keys and clears the held control when the PC pauses', async () => {
+    const { socket, view } = await mediaView()
+    const brighter = view.find('button[aria-label="Display brightness up"]').element
+    brighter.setPointerCapture = () => {}
+    pointer(brighter, 'pointerdown', 1)
+    vi.advanceTimersByTime(550)
+    expect(mediaSent(socket).length).toBeGreaterThanOrEqual(2)
+
+    socket.receive({ t: 'paused', paused: true })
+    await nextTick()
+    const atPause = mediaSent(socket).length
+    vi.advanceTimersByTime(500)
+    expect(mediaSent(socket)).toHaveLength(atPause)
+    expect(brighter.className).not.toContain('bg-surface-3')
+
+    socket.receive({ t: 'paused', paused: false })
+    vi.advanceTimersByTime(500)
+    expect(mediaSent(socket)).toHaveLength(atPause)
+    view.unmount()
+  })
+
+  it('cancels media repeats outside MediaView when the PC releases held input', async () => {
+    conn.connect()
+    const socket = lastSocket()
+    socket.open()
+    socket.receive(welcome)
+    const { pressMedia } = await import('../src/lib/input')
+    const stop = pressMedia('volumeUp')
+    vi.advanceTimersByTime(550)
+    expect(mediaSent(socket).length).toBeGreaterThanOrEqual(2)
+
+    socket.receive({ t: 'paused', paused: true })
+    const atPause = mediaSent(socket).length
+    socket.receive({ t: 'paused', paused: false })
+    vi.advanceTimersByTime(500)
+    expect(mediaSent(socket)).toHaveLength(atPause)
+    stop()
+  })
 })
