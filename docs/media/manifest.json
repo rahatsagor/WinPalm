@@ -1,15 +1,18 @@
 {
-  "sourceFile": "winpalm-launch-0.3.2.mp4",
-  "sourceSha256": "914aeb47b36efd99b5b97b7e910fe02a48f0cea63dd823a1f1e9302174b25e1f",
-  "posterSeconds": 8,
+  "sourceFile": "winpalm-launch-display-2026-11-17-v2.mp4",
+  "sourceSha256": "d94dbc5fb1e265b4fa74ce016eb1aa918d26ddb825487b57e3352ef31467c3b4",
+  "posterSeconds": 12.5,
+  "fullCanvasKeyframes": true,
+  "heroContainsCompleteDisplayTyping": true,
   "outputs": {
-    "apps-media.webp": "d1aa8037d5634c99ea8da87819a06d6be06a8eeab849e7da3954eaa5f255f30d",
-    "custom.webp": "e59a1ae72b8d822f6aa53744b9a5c9c7e078ce24e3ec8c1571ef8dbec36c6c3c",
-    "deck.webp": "ea0faa8914dc085bf3688e1a649d5f2c80f1af0eb029e3a2a5c731724cb03451",
-    "film.jpg": "2a785b99e5a1eea348d67e60406b3ae2dc4f548ed736246a0888220cd1dca78e",
-    "hero.webp": "007b41295b184cd793099068806eee1ed9990e78c1aea1a11875cd7e93a2c052",
-    "keyboard.webp": "2c3752c009068d15dfe507b342ba47a2fcb3d8ddffd49bb209fbc764dc646049",
-    "trackpad.webp": "870ba4f68fe46e77b517fb429c7dfe2702b963f4283dc5db62f5e3545d2a9edd",
-    "voice.webp": "d14d8e39aee5dd38985ec1728ece12a0b289af8ee6602e0fca9b35c5cb67ef8a"
+    "voice.webp": "ff4caf949bcfd397cbf29855d57c761db6a6bc3c4a6d2f73a5226f756a64a115",
+    "hero.webp": "ef82c2397f4fe5dab541617601ea33c653b6a37d33206a0eb2df5238471d010e",
+    "apps-media.webp": "13cf0978da626fec55333769264b182f5e155eeff4f053f1619b63ab7a10badd",
+    "custom.webp": "cb88300bdf845851d8527c70f04f951845bbe28c3c3365505fad1bc950172bf0",
+    "film.jpg": "514b42db970424b01ef8805ff88ee351d4525148b6c649b2c9eae75cbbceab13",
+    "keyboard.webp": "f765d3ef217047f30c3be1afce38123602c7bb09696e83aebdd53f13e052b33b",
+    "display.webp": "752a038e18ef09dc80dafa012ce79d14e8e7d696129dfab97d5cdd4c5f53eee1",
+    "deck.webp": "2978dd65b9b3ed8712f0c889afedfce25bff697accf770ad5ae87c8162436722",
+    "trackpad.webp": "e98dbad68bf2fc0368e129fba136e5a27580a832134b92993331e838e5b109cf"
   }
 }

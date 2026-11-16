@@ -6,9 +6,9 @@
 
 ### Your PC, in your palm.
 
-Turn your iPhone, iPad or Android phone into a wireless mouse, trackpad,<br />
-keyboard and shortcut deck for Windows.<br />
-**No phone app. No account. Your controls stay on your network.**
+See and control your Windows PC from your iPhone, iPad or Android phone.<br />
+Screen mirroring, trackpad, keyboard and shortcut deck, together in your browser.<br />
+**No phone app. No account. Free and open source.**
 
 <br />
 
@@ -29,9 +29,9 @@ keyboard and shortcut deck for Windows.<br />
 
 <br />
 
-<a href="https://winpalm.rsapplication.com"><img src="docs/media/hero.webp" width="800" alt="Animated WinPalm preview: a phone controls the Windows trackpad, keyboard, shortcut Deck and voice typing" /></a>
+<a href="https://winpalm.rsapplication.com"><img src="docs/media/hero.webp" width="800" alt="WinPalm mirrors a Windows screen to a phone with trackpad and keyboard controls, shortcut Deck and voice typing" /></a>
 
-<sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 86-second launch film</a> · <a href="https://winpalm.rsapplication.com">Try the interactive demo</a></sub>
+<sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 101-second launch film</a> · <a href="https://winpalm.rsapplication.com">Try the interactive demo</a></sub>
 
 </div>
 
@@ -131,6 +131,36 @@ If you used a private development preview, quit it and install the latest public
 
 </details>
 
+## See your PC. Stay where you are.
+
+<a href="https://winpalm.rsapplication.com/guides/windows-screen-on-phone/"><img src="docs/media/display.webp" width="800" alt="WinPalm mirrors a Windows monitor to a phone with trackpad, keyboard, zoom and fullscreen controls" /></a>
+
+Use your phone as both a controller and a window into your PC. **Screen mirroring** in the **Display**
+tab brings a selected Windows monitor to your phone, on its own, above the
+trackpad or keyboard, or beside controls on a wide screen. Zoom and pan around
+the preview without moving the PC pointer, move the pointer to the selected
+monitor when you want, or enter fullscreen to focus on the screen. Choose
+between smooth motion, lower bandwidth, sharper text, or lossless HD text.
+
+Screen viewing is optional and separately permissioned. Enable **Allow screen
+viewing** in WinPalm's **Settings → General**, then grant access to your phone
+in **Settings → Devices**. You can also ask for approval on the PC from the
+phone. Video travels directly between the PC and phone over encrypted WebRTC,
+with no cloud relay. WinPalm captures no desktop audio and saves no screen
+recordings. Viewing stops when you leave the Display tab, pause control, or
+the PC locks, sleeps, or turns off its displays. Read the [screen viewing
+guide](https://winpalm.rsapplication.com/docs/screen-mirroring/)
+for setup and privacy details.
+
+One allowed device can view one selected monitor at a time. Use trusted HTTPS
+to protect the page, controls and pairing too; WebRTC encryption alone does not
+protect HTTP signaling. A reachable private VPN can work, but screen media
+requires a direct UDP path. Controls may connect while Display cannot, and a
+web reverse proxy does not carry the screen stream. WinPalm is not an extra
+monitor or an extended desktop.
+
+[Screen mirroring setup →](https://winpalm.rsapplication.com/docs/screen-mirroring/)
+
 ## Everything you need from the couch
 
 <table>
@@ -190,7 +220,30 @@ Speak into your phone and let a compatible installed Windows recognizer type on 
 </tr>
 </table>
 
-<sub>Animated previews from the 0.3.2 launch film, including the redesigned Windows interface. Phone UI and illustrated PC responses; no live Windows footage.</sub>
+<table>
+<tr>
+<td width="50%" valign="top">
+
+#### Live screen viewing
+See a selected Windows monitor right on your phone. Pick the display, choose
+how it fits beside your controls, zoom into details, or go fullscreen. HD text
+mode sends lossless pictures up to a 3840 × 2160 pixel budget, at up to one
+update per second.
+
+</td>
+<td width="50%" valign="top">
+
+#### Permission stays with you
+Screen viewing starts off disabled. Turn it on in General, grant it per device,
+or approve a one-time request from someone at the PC. The PC stops capturing
+when viewing ends, access is revoked, control is paused, or Windows locks or
+sleeps. No desktop audio or screen recording.
+
+</td>
+</tr>
+</table>
+
+<sub>Animated previews from the updated 101-second launch film, including screen mirroring and the redesigned Windows interface. Phone UI and illustrated PC responses; no live Windows footage.</sub>
 
 Pair multiple phones and tablets. Settings, custom keyboards and gestures are backed up on the PC for each device. **Copy settings from another device** lets you select individual settings sections and keyboards. Deck pages are shared across paired devices.
 
@@ -202,7 +255,7 @@ For slides, use large arrow keys. For games, make a WASD layout. For movie night
 
 <a href="https://winpalm.rsapplication.com/#film"><img src="docs/media/film.jpg" width="640" alt="Watch the complete WinPalm launch film" /></a>
 
-<sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 86-second film on winpalm.rsapplication.com</a></sub>
+<sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 101-second film on winpalm.rsapplication.com</a></sub>
 
 </div>
 
@@ -210,7 +263,7 @@ For slides, use large arrow keys. For games, make a WASD layout. For movie night
 
 - **No accounts or analytics.** Phone controls connect directly to your PC over your local network.
 - **Pair devices you trust.** Use QR, PIN or explicit PC approval; revoke a device from Windows at any time.
-- **You stay in control.** Pause releases held input and stops running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
+- **You stay in control.** Pause releases held input and stops screen viewing, running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
 - **Your setup stays on your PC.** Pairings, settings, Deck pages, custom keyboards and certificates live under `%LOCALAPPDATA%\RS Application\WinPalm`.
 
 Use trusted HTTPS where network traffic could be observed. HTTP does not encrypt input or reconnect tokens. Update checks contact GitHub and can be turned off. Using your phone keyboard's own dictation follows the phone provider's privacy settings. See [SECURITY.md](SECURITY.md) for the full model.
@@ -258,7 +311,7 @@ Builds, dependencies, caches and local reports go to `../winpalm-dev/`. The sour
 
 Future releases follow CmdPalm's routine: update the changelog, run **`bun scripts/bump-version.ts VERSION`**, commit and push, then tag **`vVERSION`**. The release workflow runs native x64/ARM64 checks, builds setup, verifies checksums and publishes the release. See [CONTRIBUTING.md](CONTRIBUTING.md), [the release guide](docs/RELEASING.md) and [the protocol](docs/PROTOCOL.md).
 
-When the launch film changes, regenerate the README animations and poster with **`scripts/readme-media.sh ../winpalm-dev/launch-film/renders/winpalm-launch-VERSION.mp4`**. The generated [media manifest](docs/media/manifest.json) records the master and preview hashes. Publish the matching film and posters on the website together.
+When the launch film changes, regenerate the README animations and poster with **`scripts/readme-media.sh ../winpalm-dev/launch-film/renders/winpalm-launch-display-2026-11-17-v2.mp4`**. The generated [media manifest](docs/media/manifest.json) records the master and preview hashes. Publish the matching film and posters on the website together. The current reviewed 101-second film includes Display, screen mirroring and permission controls.
 
 ## License
 
