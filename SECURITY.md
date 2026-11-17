@@ -38,8 +38,11 @@ and can delay automatic screen-saver locking. Explicit lock, sleep and display
 power-off still stop the view. Every capture owns its own request handle, so
 stopping or rebuilding an old capture cannot release a replacement's requests.
 The initial session state is queried before serving phones and reconciled
-after session events and during polling. An unreadable state pauses control
-until a successful query or appropriate session transition permits it.
+after session events and during polling. If Remote Desktop Services is not
+available, the fallback requires the Default desktop to be receiving user
+input. Merely opening a desktop is insufficient because a disconnected session
+can expose its future desktop. Known locked/disconnected WTS states take
+precedence, and an unverifiable state pauses control.
 
 Only one viewer is active at a time. A host-generated generation binds every capture and frame to its authorized connection. Pause, lock, sleep, display power-off, revocation, global disable, disconnect, an expired visible-phone lease, or capture failure cancels it. Queued native starts and late encoded frames cannot revive a cancelled view. Capture, readback, encoding and media queues are bounded. No desktop audio is captured, and no screen pictures or video are recorded to disk or logged.
 
