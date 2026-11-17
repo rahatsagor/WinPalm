@@ -62,6 +62,7 @@ function onClick(button: MouseButton, event: MouseEvent) {
       @pointerdown="down(button, $event)"
       @pointerup="up(button, $event)"
       @pointercancel="up(button, $event)"
+      @lostpointercapture="up(button, $event)"
       @click="onClick(button, $event)"
       @keydown.enter.prevent="click(button)"
       @keydown.space.prevent="click(button)"

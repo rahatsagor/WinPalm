@@ -8,6 +8,7 @@ export function onPageHidden(fn: () => void) {
     ([status, paused]) => {
       if (status !== 'connected' || paused) fn()
     },
+    { flush: 'sync' },
   )
   if (typeof document === 'undefined') return
   const listener = () => {

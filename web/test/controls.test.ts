@@ -35,6 +35,22 @@ const readerClick = (el: Element) => el.dispatchEvent(new MouseEvent('click', { 
 const enter = (el: Element) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
 
 describe('controls used without touch', () => {
+  it('releases only the click bar owner when pointer capture is lost', async () => {
+    const socket = connect()
+    const input = await import('../src/lib/input')
+    const { default: ClickBar } = await import('../src/components/ClickBar.vue')
+    const view = mount(ClickBar, { attachTo: document.body })
+    const left = view.find('[aria-label="left mouse button"]').element
+    const other = input.buttonDown('left')
+    const pointer = (type: string) => left.dispatchEvent(new PointerEvent(type, { pointerId: 1, pointerType: 'touch', bubbles: true }))
+    pointer('pointerdown')
+    pointer('lostpointercapture')
+    expect(socket.sent.filter(message => message.t === 'button')).toMatchObject([{ op: 'down' }])
+    other()
+    expect(socket.sent.filter(message => message.t === 'button')).toMatchObject([{ op: 'down' }, { op: 'up' }])
+    pointer('lostpointercapture'); pointer('pointerup')
+    expect(socket.sent.filter(message => message.t === 'button')).toHaveLength(2)
+  })
   it('ignores old button and media cleanup after release, pause and reconnect', async () => {
     const socket = connect()
     const input = await import('../src/lib/input')
