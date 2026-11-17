@@ -67,6 +67,8 @@ Screen mirroring, trackpad, keyboard and shortcut deck, together in your browser
 
 Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Closing the window keeps WinPalm in the notification area; reopen, pause or quit it from the tray. **Ctrl + Alt + Pause** toggles control when that shortcut is available.
 
+Away from home? Use [Tailscale or a private VPN](#away-from-home-with-tailscale) and the PC’s VPN address.
+
 ### New in 0.3.2
 
 The Windows app now has a redesigned dark interface with grouped settings, rounded cards and scalable icons. **Connect** puts the QR code, six-digit PIN countdown, copyable phone address and **Standard HTTP / Encrypted HTTPS** switcher together. **Phone setup** guides certificate installation with phone-specific instructions, a certificate QR code and fingerprint copying.
@@ -155,8 +157,8 @@ for setup and privacy details.
 One allowed device can view one selected monitor at a time. Use trusted HTTPS
 to protect the page, controls and pairing too; WebRTC encryption alone does not
 protect HTTP signaling. A reachable private VPN can work, but screen media
-requires a direct UDP path. Controls may connect while Display cannot, and a
-web reverse proxy does not carry the screen stream. WinPalm is not an extra
+requires a working UDP path through that network. Controls may connect while
+Display cannot, and a web reverse proxy does not carry the screen stream. WinPalm is not an extra
 monitor or an extended desktop.
 
 [Screen mirroring setup →](https://winpalm.rsapplication.com/docs/screen-mirroring/)
@@ -259,9 +261,38 @@ For slides, use large arrow keys. For games, make a WASD layout. For movie night
 
 </div>
 
+## Away from home with Tailscale
+
+Use WinPalm outside your home network by connecting your Windows PC and phone
+with **Tailscale** or another private VPN. Keep WinPalm running and Windows
+awake and unlocked for screen viewing.
+
+1. Install Tailscale on the PC and phone, connect both to the same authorized
+   tailnet, and copy the PC’s **Tailscale IPv4 address**.
+2. In WinPalm on Windows, open **Advanced → Network & Binding**. Under
+   **QR link address**, select **Custom / VPN** and paste the bare Tailscale IP
+   into **Custom host or URL**, without a scheme or port.
+3. Choose **Save & restart server**, then use the newly generated address on
+   **Connect**. WinPalm adds the current port; the default is 8790, but it may
+   choose another available port. An old home-Wi-Fi QR code or bookmark will
+   not work away from that LAN.
+4. Keep Tailscale connected on both devices and pair at the new address.
+   Choose **Encrypted HTTPS** and follow the certificate instructions for a
+   trusted browser connection. Tailscale encryption alone does not make an
+   HTTP page a secure context for microphone access.
+
+Tailnet access rules and Windows Firewall must allow the intended connection.
+Display still requires separate screen permission and a working UDP path
+through the private network. Controls can connect while video cannot.
+WinPalm has no hosted video relay; Tailscale may use its own direct or relayed
+connection. A web reverse proxy does not carry the screen stream. No public
+port forwarding is needed.
+
+**[Full Tailscale setup and troubleshooting →](https://winpalm.rsapplication.com/docs/remote-access/)**
+
 ## Private by design
 
-- **No accounts or analytics.** Phone controls connect directly to your PC over your local network.
+- **No accounts or analytics.** Phone controls connect to your PC over your own LAN or private VPN.
 - **Pair devices you trust.** Use QR, PIN or explicit PC approval; revoke a device from Windows at any time.
 - **You stay in control.** Pause releases held input and stops screen viewing, running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
 - **Your setup stays on your PC.** Pairings, settings, Deck pages, custom keyboards and certificates live under `%LOCALAPPDATA%\RS Application\WinPalm`.
@@ -272,7 +303,7 @@ Use trusted HTTPS where network traffic could be observed. HTTP does not encrypt
 
 - **Windows 11 recommended**, on Intel/AMD x64 or ARM64. Setup accepts Windows 10 version 1809 or later; every older Windows/driver combination has not been verified. There is no 32-bit app.
 - **iOS/iPadOS 17+**, or a current Android browser.
-- **A shared private network**, with Windows Firewall allowing WinPalm. No public internet port is needed.
+- **A shared private LAN or VPN**, with Windows Firewall allowing WinPalm. No public internet port is needed.
 - **For voice typing:** trusted HTTPS and a compatible installed offline Windows speech recognizer.
 
 WinPalm runs with normal user permissions. UAC prompts, the lock screen and higher-integrity apps are protected by Windows. Some games and remote desktop apps reject synthetic input; media seeking, brightness and app activation depend on Windows, the app and hardware support.
@@ -287,9 +318,9 @@ You can also download and run the latest **[WinPalm-Setup.exe](https://github.co
 
 ## Docs and troubleshooting
 
-Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for installation, pairing, HTTPS, voice typing and settings. The **[guides](https://winpalm.rsapplication.com/guides/)** cover everyday workflows.
+Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for installation, pairing, HTTPS, Tailscale remote access, voice typing and settings. The **[guides](https://winpalm.rsapplication.com/guides/)** cover everyday workflows.
 
-- **Phone cannot connect:** check the shared network, Windows Private profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
+- **Phone cannot connect:** check the shared LAN or VPN, the intended Windows network profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
 - **Microphone unavailable:** export the public certificate from Phone setup, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
 - **Speech will not start:** choose **General → Check setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
 - **Need a diagnostic report:** run **Test-WinPalm.cmd** from the app folder. Its disposable checks cover the native DLL, storage, icons, server, pairing and pause/revocation. The optional input test uses a temporary editor; leave the PC idle while it runs.
