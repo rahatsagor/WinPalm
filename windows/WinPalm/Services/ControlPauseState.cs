@@ -14,6 +14,20 @@ internal sealed class ControlPauseState
   internal bool DisplayAwake { get; set; } = true;
   internal bool CanView => DisplayAwake && !Active;
 
+  internal bool? ReconcileSession(ControlPauseReason session, bool paused)
+  {
+    var changed = false;
+    ControlPauseReason[] reasons = [ControlPauseReason.SessionLocked, ControlPauseReason.SessionDisconnected];
+    // Add new blockers before removing old ones. A transition between lock
+    // and disconnect must never briefly restore control or screen access.
+    foreach (var reason in reasons)
+      if ((session & reason) != 0) changed |= Suspend(reason, paused);
+    bool? restore = null;
+    foreach (var reason in reasons)
+      if ((session & reason) == 0 && Resume(reason) is { } previous) restore = previous;
+    return Active && changed ? true : restore;
+  }
+
   internal bool Suspend(ControlPauseReason reason, bool paused)
   {
     if ((reasons & reason) != 0) return false;

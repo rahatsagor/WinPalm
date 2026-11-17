@@ -36,7 +36,7 @@ internal sealed class ApprovalWindow : Form
     model = request.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
     address = request.GetProperty("address").GetString() ?? "";
 
-    Text = screenRequest ? "WinPalm · Screen viewing request" : "WinPalm · Pairing request";
+    Text = screenRequest ? "WinPalm · Screen mirroring request" : "WinPalm · Pairing request";
     FormBorderStyle = FormBorderStyle.None;
     ShowInTaskbar = false;
     TopMost = true;
@@ -59,7 +59,7 @@ internal sealed class ApprovalWindow : Form
     var btnY = Math.Max(pad + Theme.Px(52), contentBottom) + Theme.Px(16);
 
     var deny = new PalmButton("Don't allow", () => Answer(false), ButtonTone.Secondary, compact: true) { BackColor = Theme.Surface };
-    var allow = new PalmButton(screenRequest ? "Allow screen viewing" : "Allow device", () => Answer(true), ButtonTone.Primary, IconKind.Check, compact: true) { BackColor = Theme.Surface };
+    var allow = new PalmButton(screenRequest ? "Allow screen mirroring" : "Allow device", () => Answer(true), ButtonTone.Primary, IconKind.Check, compact: true) { BackColor = Theme.Surface };
     deny.PerformAutoSize();
     allow.PerformAutoSize();
     allow.Location = new Point(width - pad - allow.Width, btnY);

@@ -14,6 +14,8 @@
     <Compile Include="../WinPalm/Services/ControlPauseState.cs" Link="Services/ControlPauseState.cs" />
     <Compile Include="../WinPalm/Services/DisplayPreference.cs" Link="Services/DisplayPreference.cs" />
     <Compile Include="../WinPalm/Services/DisplayPower.cs" Link="Services/DisplayPower.cs" />
+    <Compile Include="../WinPalm/Services/ClipboardRestore.cs" Link="Services/ClipboardRestore.cs" />
+    <Compile Include="../WinPalm/Services/SessionAvailability.cs" Link="Services/SessionAvailability.cs" />
     <Compile Include="../WinPalm/UI/LayoutMath.cs" Link="UI/LayoutMath.cs" />
   </ItemGroup>
 </Project>

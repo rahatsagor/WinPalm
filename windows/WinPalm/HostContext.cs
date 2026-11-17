@@ -55,6 +55,7 @@ internal sealed class HostContext : ApplicationContext
     SystemEvents.SessionSwitch += SessionChanged; SystemEvents.PowerModeChanged += PowerChanged;
     SystemEvents.DisplaySettingsChanged += DisplaysChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
+    RefreshSessionState();
     Start(); CheckNetwork();
     timer = new System.Windows.Forms.Timer { Interval = 2000 }; timer.Tick += async (_, _) => await Poll(); timer.Start();
     if (!minimized) ShowWindow();
@@ -135,6 +136,7 @@ internal sealed class HostContext : ApplicationContext
     {
       var snapshot = await Task.Run(() =>
       {
+        RefreshSessionState();
         var current = CoreBridge.Call(new { op = "status" });
         var layout = KeyboardLayouts.Current; var foreground = Win32.GetForegroundWindow();
         if (layout != lastLayout) { lastLayout = layout; CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); }
@@ -199,7 +201,7 @@ internal sealed class HostContext : ApplicationContext
       var approval = new ApprovalWindow(request, approvals.Count + displayApprovals.Count, screenRequest: true, response: RespondDisplayApproval);
       displayApprovals[id] = approval;
       approval.Show();
-      tray.ShowBalloonTip(8000, "WinPalm screen viewing request", "A connected device is asking to view your screen. Review its name and address in WinPalm.", ToolTipIcon.Info);
+      tray.ShowBalloonTip(8000, "WinPalm screen mirroring request", "A connected device is asking to view your screen. Review its name and address in WinPalm.", ToolTipIcon.Info);
     }
   }
   private void RespondDisplayApproval(ulong id, bool allow)
@@ -223,7 +225,7 @@ internal sealed class HostContext : ApplicationContext
       if (allow && !previous)
         try { SetDisplayEnabled(false); } catch (Exception restoreError) { Diagnostics.Record(restoreError); }
       Diagnostics.Record(error);
-      tray.ShowBalloonTip(8000, "WinPalm screen viewing", "The screen-viewing settings could not be saved. Check General and try again.", ToolTipIcon.Warning);
+      tray.ShowBalloonTip(8000, "WinPalm screen mirroring", "The screen-mirroring settings could not be saved. Check General and try again.", ToolTipIcon.Warning);
     }
     RefreshSoon();
   }
@@ -241,14 +243,28 @@ internal sealed class HostContext : ApplicationContext
   }
   private void SessionChanged(object sender, SessionSwitchEventArgs args)
   {
+    // Stop immediately on a lock/disconnect event. Reconcile unlocks against
+    // the current session rather than trusting a possibly queued old event.
     if (args.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.SessionLogoff)
       SuspendControl(ControlPauseReason.SessionLocked);
-    else if (args.Reason == SessionSwitchReason.RemoteDisconnect)
+    else if (args.Reason is SessionSwitchReason.RemoteDisconnect or SessionSwitchReason.ConsoleDisconnect)
       SuspendControl(ControlPauseReason.SessionDisconnected);
-    else if (args.Reason == SessionSwitchReason.SessionUnlock)
-      OnWindowThread(() => ResumeControl(ControlPauseReason.SessionLocked));
-    else if (args.Reason == SessionSwitchReason.RemoteConnect)
-      OnWindowThread(() => ResumeControl(ControlPauseReason.SessionDisconnected));
+    else RefreshSessionState();
+    OnWindowThread(RefreshSoon);
+  }
+  private void RefreshSessionState()
+  {
+    lock (lockGate)
+    {
+      if (quitting) return;
+      var session = SessionAvailability.Read();
+      var paused = true;
+      try { paused = CoreBridge.Call(new { op = "status" }).GetProperty("paused").GetBoolean(); }
+      catch (InvalidOperationException error) { Diagnostics.Record(error); }
+      if (automaticPause.ReconcileSession(session, paused) is { } next)
+        CoreBridge.TryCall(new { op = "pause", paused = next });
+      CoreBridge.TryCall(new { op = "displayAwake", awake = automaticPause.CanView });
+    }
   }
   private void DisplaysChanged(object? sender, EventArgs args)
   {
@@ -286,6 +302,7 @@ internal sealed class HostContext : ApplicationContext
     lock (lockGate)
     {
       if (quitting) return;
+      RefreshSessionState();
       if (automaticPause.Resume(reason) is { } paused) CoreBridge.TryCall(new { op = "pause", paused });
       CoreBridge.TryCall(new { op = "displayAwake", awake = automaticPause.CanView });
     }

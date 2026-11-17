@@ -409,7 +409,7 @@ internal sealed class MainWindow : Form
 
   private void BuildGeneral()
   {
-    page.AddBlock(new PageHeader("General", "Startup behavior, screen viewing, offline voice typing, and app discovery."));
+    page.AddBlock(new PageHeader("General", "Startup behavior, screen mirroring, offline voice typing, and app discovery."));
 
     var startupCard = new SurfaceCard("Startup & Background", "WinPalm lives quietly in the notification area by the clock. Closing this window keeps phones connected.");
     SettingToggleRow? loginToggle = null;
@@ -436,8 +436,8 @@ internal sealed class MainWindow : Form
 
     var displayCard = new SurfaceCard("Display", "View one PC monitor on your phone, with a trackpad or keyboard alongside it. Only explicitly allowed devices can view.");
     displayToggle = new SettingToggleRow(
-      "Allow screen viewing",
-      "Enable the phone's Display tab. Each device also needs its own screen access grant in Devices.",
+      "Allow screen mirroring",
+      "Enable the phone's Display tab. Each device also needs its own screen access grant in Devices. The PC and display stay awake during a live view.",
       host.Preferences.DisplayEnabled,
       value => Action(() => host.SetDisplayEnabled(value)),
       IconKind.Connect,
