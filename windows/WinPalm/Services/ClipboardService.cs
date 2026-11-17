@@ -6,7 +6,7 @@ internal sealed class ClipboardService(StaWorker worker)
   /// it also keeps WinPalm's temporary paste text out of clipboard history.
   private const string Excluded = "ExcludeClipboardContentFromMonitorProcessing";
   private IDataObject? saved;
-  private uint sequence;
+  private readonly ClipboardRestore ownership = new();
   [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
   [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
   [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
@@ -24,21 +24,21 @@ internal sealed class ClipboardService(StaWorker worker)
     data.SetData(Excluded, false, new MemoryStream(new byte[4]));
     data.SetData("CanIncludeInClipboardHistory", false, new MemoryStream(new byte[4]));
     data.SetData("CanUploadToCloudClipboard", false, new MemoryStream(new byte[4]));
-    Clipboard.SetDataObject(data, true); sequence = GetClipboardSequenceNumber(); return true;
+    Clipboard.SetDataObject(data, true); ownership.Begin(GetClipboardSequenceNumber()); return true;
   }));
   internal void End() => worker.Run(() => Retry(() =>
   {
     // Never overwrite something the person copied during the paste.
-    if (GetClipboardSequenceNumber() == sequence)
+    ownership.End(GetClipboardSequenceNumber(), () =>
     {
       if (saved is not null) Clipboard.SetDataObject(saved, true);
       else Clipboard.Clear();
-    }
+    });
     saved = null; return true;
   }));
   /// Puts back the clipboard of a paste that hasn't ended, for when WinPalm
   /// quits before the core's delayed restore.
-  internal void EndPending() => worker.Run(() => { if (saved is not null) End(); return true; });
+  internal void EndPending() => End();
   /// Materialize every format before taking clipboard ownership; delayed
   /// rendering objects otherwise become unreadable after SetText. A format
   /// that can't be read (large images from some apps, or formats .NET no

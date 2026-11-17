@@ -23,6 +23,7 @@ use crate::protocol::DisplayInfo;
 
 #[path = "display_windows/encoder.rs"]
 mod encoder;
+mod power;
 use encoder::Encoder;
 pub(crate) use encoder::self_test;
 
@@ -201,7 +202,7 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
             host.display_failed(
                 capture.settings.session,
                 capture.settings.generation,
-                "Screen viewing stopped. Unlock or return to your Windows desktop, then start again.".into(),
+                "Screen mirroring stopped. Unlock or return to your Windows desktop, then start again.".into(),
             );
             active = None;
             continue;
@@ -368,6 +369,7 @@ struct Capture {
     first_frame_deadline: Instant,
     sent: bool,
     _timer: crate::input::windows::TimerResolution,
+    _power: power::KeepAwake,
 }
 impl Capture {
     fn new(host: Weak<CoreHost>, mut settings: Settings) -> Result<Self> {
@@ -436,6 +438,7 @@ impl Capture {
                 first_frame_deadline: Instant::now() + Duration::from_secs(10),
                 sent: false,
                 _timer: timer,
+                _power: power::KeepAwake::new()?,
             })
         }
     }

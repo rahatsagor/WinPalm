@@ -76,6 +76,9 @@ sealed class Tests
       Sync("failed screen enable restores live and persisted preferences", DisplayPreferenceLiveFailure);
       Sync("display power cannot bypass overlapping lock or sleep", DisplayPowerOverlaps);
       Sync("display power notification validates setting length and state", DisplayPowerNotifications);
+      Sync("initial session state reads locked disconnected and invalid data", InitialSessionState);
+      Sync("session reconciliation preserves manual and sleep pauses", SessionReconciliation);
+      Sync("temporary paste restores an empty clipboard and cleanup is retryable", ClipboardCleanup);
       Sync("app activation waits for the foreground confirmation", ActivationCompletion);
       Sync("app activation has a bounded timeout", ActivationTimeout);
       Sync("cancelled app activation stops waiting and cannot succeed", ActivationCancellation);
@@ -96,6 +99,68 @@ sealed class Tests
       True(state.Suspend(first, false)); True(state.Suspend(second, true));
       True(state.Resume(second) is null); True(state.Active);
       Equal(false, state.Resume(first)); False(state.Active);
+    }
+  }
+
+  private void InitialSessionState()
+  {
+    var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(20);
+    try
+    {
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 0, 1);
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 12, 0);
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 16, 0);
+      Equal(ControlPauseReason.SessionLocked, SessionAvailability.Parse(buffer, 20));
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 16, 1);
+      Equal((ControlPauseReason)0, SessionAvailability.Parse(buffer, 20));
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 12, 4);
+      Equal(ControlPauseReason.SessionDisconnected, SessionAvailability.Parse(buffer, 20));
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 16, -1);
+      Equal(ControlPauseReason.SessionLocked | ControlPauseReason.SessionDisconnected, SessionAvailability.Parse(buffer, 20));
+      Equal(ControlPauseReason.SessionLocked, SessionAvailability.Parse(buffer, 19));
+      System.Runtime.InteropServices.Marshal.WriteInt32(buffer, 0, 2);
+      Equal(ControlPauseReason.SessionLocked, SessionAvailability.Parse(buffer, 20));
+      Equal(ControlPauseReason.SessionLocked, SessionAvailability.Parse(0, 20));
+    }
+    finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer); }
+  }
+
+  private void ClipboardCleanup()
+  {
+    var ownership = new ClipboardRestore();
+    string? original = null;
+    string? clipboard = "temporary private text";
+    var restored = 0;
+    void Restore() { clipboard = original; restored++; }
+    ownership.Begin(10);
+    ownership.End(10, Restore);
+    True(clipboard is null); Equal(1, restored);
+    ownership.End(10, Restore); Equal(1, restored);
+    original = "old text"; clipboard = "person copied something new";
+    ownership.Begin(20);
+    ownership.End(21, Restore);
+    Equal("person copied something new", clipboard); Equal(1, restored);
+    ownership.Begin(30);
+    Throws<IOException>(() => ownership.End(30, () => throw new IOException("clipboard busy")));
+    ownership.End(30, Restore);
+    Equal("old text", clipboard); Equal(2, restored);
+  }
+
+  private void SessionReconciliation()
+  {
+    foreach (var manual in new[] { false, true })
+    {
+      var state = new ControlPauseState();
+      Equal(true, state.ReconcileSession(ControlPauseReason.SessionLocked, manual));
+      True(state.ReconcileSession(ControlPauseReason.SessionLocked, true) is null);
+      Equal(true, state.ReconcileSession(ControlPauseReason.SessionDisconnected, true));
+      True(state.Active); False(state.CanView);
+      state.Suspend(ControlPauseReason.Sleep, true);
+      True(state.ReconcileSession(0, true) is null);
+      True(state.Active); False(state.CanView);
+      Equal(manual, state.Resume(ControlPauseReason.Sleep));
+      False(state.Active);
+      True(state.ReconcileSession(0, manual) is null);
     }
   }
 
