@@ -144,15 +144,19 @@ the preview without moving the PC pointer, move the pointer to the selected
 monitor when you want, or enter fullscreen to focus on the screen. Choose
 between smooth motion, lower bandwidth, sharper text, or lossless HD text.
 
-Screen viewing is optional and separately permissioned. Enable **Allow screen
-viewing** in WinPalm's **Settings → General**, then grant access to your phone
+Screen mirroring is optional and separately permissioned. Enable **Allow screen
+mirroring** in WinPalm's **Settings → General**, then grant access to your phone
 in **Settings → Devices**. You can also ask for approval on the PC from the
 phone. Video travels directly between the PC and phone over encrypted WebRTC,
 with no cloud relay. WinPalm captures no desktop audio and saves no screen
 recordings. Viewing stops when you leave the Display tab, pause control, or
-the PC locks, sleeps, or turns off its displays. Read the [screen viewing
+the PC locks, sleeps, or turns off its displays. Read the [screen mirroring
 guide](https://winpalm.rsapplication.com/docs/screen-mirroring/)
 for setup and privacy details.
+
+During a live view, WinPalm asks Windows to keep the PC and display awake.
+Explicit lock, sleep and display power-off still end capture. Refreshing the
+monitor list keeps an authorized view running.
 
 One allowed device can view one selected monitor at a time. Use trusted HTTPS
 to protect the page, controls and pairing too; WebRTC encryption alone does not
@@ -226,7 +230,7 @@ Speak into your phone and let a compatible installed Windows recognizer type on 
 <tr>
 <td width="50%" valign="top">
 
-#### Live screen viewing
+#### Live screen mirroring
 See a selected Windows monitor right on your phone. Pick the display, choose
 how it fits beside your controls, zoom into details, or go fullscreen. HD text
 mode sends lossless pictures up to a 3840 × 2160 pixel budget, at up to one
@@ -236,7 +240,7 @@ update per second.
 <td width="50%" valign="top">
 
 #### Permission stays with you
-Screen viewing starts off disabled. Turn it on in General, grant it per device,
+Screen mirroring starts off disabled. Turn it on in General, grant it per device,
 or approve a one-time request from someone at the PC. The PC stops capturing
 when viewing ends, access is revoked, control is paused, or Windows locks or
 sleeps. No desktop audio or screen recording.
@@ -265,7 +269,7 @@ For slides, use large arrow keys. For games, make a WASD layout. For movie night
 
 Use WinPalm outside your home network by connecting your Windows PC and phone
 with **Tailscale** or another private VPN. Keep WinPalm running and Windows
-awake and unlocked for screen viewing.
+awake and unlocked for screen mirroring.
 
 1. Install Tailscale on the PC and phone, connect both to the same authorized
    tailnet, and copy the PC’s **Tailscale IPv4 address**.
@@ -294,7 +298,7 @@ port forwarding is needed.
 
 - **No accounts or analytics.** Phone controls connect to your PC over your own LAN or private VPN.
 - **Pair devices you trust.** Use QR, PIN or explicit PC approval; revoke a device from Windows at any time.
-- **You stay in control.** Pause releases held input and stops screen viewing, running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
+- **You stay in control.** Pause releases held input and stops screen mirroring, running commands and dictation. PowerShell is off by default and uses your normal user permissions when enabled.
 - **Your setup stays on your PC.** Pairings, settings, Deck pages, custom keyboards and certificates live under `%LOCALAPPDATA%\RS Application\WinPalm`.
 
 Use trusted HTTPS where network traffic could be observed. HTTP does not encrypt input or reconnect tokens. Update checks contact GitHub and can be turned off. Using your phone keyboard's own dictation follows the phone provider's privacy settings. See [SECURITY.md](SECURITY.md) for the full model.
@@ -322,6 +326,8 @@ Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for 
 
 - **Phone cannot connect:** check the shared LAN or VPN, the intended Windows network profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
 - **Microphone unavailable:** export the public certificate from Phone setup, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
+- **Paired devices cannot be loaded:** quit and reopen WinPalm after restoring access to its data folder or using the version that wrote the file. Phone tokens are retained. To intentionally start over, back up the data folder, then use **Devices → Remove all** and pair again.
+- **HTTPS authority changed:** damaged or inconsistent certificate files may require a new local authority. Verify its new fingerprint, trust the new public certificate on each phone and remove the obsolete authority. An ordinary server-certificate renewal keeps the existing authority.
 - **Speech will not start:** choose **General → Check setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
 - **Need a diagnostic report:** run **Test-WinPalm.cmd** from the app folder. Its disposable checks cover the native DLL, storage, icons, server, pairing and pause/revocation. The optional input test uses a temporary editor; leave the PC idle while it runs.
 

@@ -78,6 +78,10 @@ without spaces; the phone app uses a UUID. Other IDs are `denied` as
 | `pin` | `pin` | The six-digit PIN shown on the PC. It works only while the PC shows it, and for three minutes after. |
 | `approve` | | Ask the person at the PC to accept. The PC replies `pending` and waits up to two minutes. |
 
+If the saved trust file is unreadable or from an unsupported version, token
+authentication and remembered pairing receive `denied` with `reason: "busy"`
+and `retryAfter: 5`. This is retryable and must not erase the phone token.
+
 On success the PC sends `welcome`:
 
 | Field | Meaning |
@@ -86,7 +90,7 @@ On success the PC sends `welcome`:
 | `host` | `{name, version, os}`. |
 | `sessionKey` | Short-lived key for `/api/icon`. |
 | `token` | Present after a new pairing with `remember: true`. Store it and use it for `token` auth. |
-| `features` | `{voice, shell, secure, permission, display, displayRequests, displayOriginal}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level, screen viewing enabled globally, native screen-access requests supported, lossless HD text supported. Display fields are absent on older hosts. They do not themselves grant this device screen access. |
+| `features` | `{voice, shell, secure, permission, display, displayRequests, displayOriginal}`: voice typing available, shell commands allowed, connection is TLS, Windows permits input to the foreground desktop and integrity level, screen mirroring enabled globally, native screen-access requests supported, lossless HD text supported. Display fields are absent on older hosts. They do not themselves grant this device screen access. |
 | `deck` | The current deck (see below). |
 | `deckRevision` | The revision of the current deck during this host run. Missing on older hosts. Send it with `deckSave` to avoid overwriting newer changes. |
 | `layout` | The PC's keyboard layout, if known. |
@@ -285,16 +289,20 @@ PC never uses them to type a character.
 ```
 
 Limits: 1 to 24 pages, 1 to 8 columns and up to 64 tiles per page,
-80-character labels, IDs of up to 128 bytes, and 4 096 bytes (UTF-8) of text,
+80-character labels, nonempty IDs of up to 128 bytes, and 4 096 bytes (UTF-8) of text,
 URL or shell command per action. App IDs and shortcut names are limited to
 512 bytes, a `keys` action's `char` to 16 bytes, an emoji icon to 64 bytes
 and a symbol name to 128. `color` is `#rgb`, `#rgba`, `#rrggbb` or
 `#rrggbbaa`. The PC rejects a deck that breaks these limits, and the sender
 gets a `notice` explaining why.
 
-## Screen viewing
+Page IDs must be unique across a Deck. Button IDs must be unique within their
+page. Invalid native imports and phone saves leave the previous Deck and
+revision intact.
 
-Screen viewing extends protocol version 1. Send listing and media requests
+## Screen mirroring
+
+Screen mirroring extends protocol version 1. Send listing and media requests
 only to hosts advertising `features.display`; a false value means supported
 but disabled globally, and a missing field identifies an older host. A disabled
 host can answer listing requests with setup guidance. Access requests depend
@@ -306,7 +314,7 @@ Media Foundation H.264. It prefers a compatible hardware encoder and uses the
 Windows software encoder as a fallback. Screen audio is not captured. Media
 and pictures never enter the control WebSocket or a recording file.
 
-The General setting must enable screen viewing, and each device needs a
+The General setting must enable screen mirroring, and each device needs a
 separate screen-access grant in Devices. A phone can request approval when
 `features.displayRequests` is true, even when global viewing is disabled. Only
 the PC's native Allow action grants access. Requests expire after 60 seconds.
@@ -344,6 +352,13 @@ tears down its peer and clears video on deactivation, hiding, or disconnect;
 resuming requires another View action. Selecting a monitor does not move the
 pointer. There is no desktop audio stream.
 
+Refreshing the display list keeps an allowed active view. Overlapping native
+queries are coalesced and answer the newest client request; immediate repeat
+requests can use the cached list. A failed list does not clear a live view.
+Single UDP send errors are treated as packet loss; a sustained send failure
+ends the view. A live Windows capture holds display/system power requests,
+which are released when that capture ends.
+
 HD text (`original`) uses an ordered reliable data channel named
 `cmdpalm.original`, protected by DTLS. The PC sends lossless PNG pictures at up
 to one update per second. The image is bounded to a 3840 × 2160 pixel budget,
@@ -352,7 +367,9 @@ including portrait orientation, and is not upscaled. Each PNG is limited to
 `CPNG`, a u32 sequence, u32 total PNG length, and u32 byte offset, all integers
 little-endian. The phone validates ordering, bounds, PNG signature, and IHDR
 dimensions before decoding. The stream uses bounded buffering and stops if a
-picture transfer stalls. The same device grants, lease and stop controls apply
+picture transfer stalls. One picture can be in flight and only the newest
+waiting picture is retained, so a static screen cannot end on an older queued
+picture. The same device grants, lease and stop controls apply
 to H.264 and HD text.
 
 ## Phone settings
