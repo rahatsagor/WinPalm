@@ -8,6 +8,7 @@ let conn: typeof import('../src/lib/connection')
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.stubGlobal('WebSocket', FakeSocket)
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   FakeSocket.all = []
   localStorage.clear()
   localStorage.setItem('winpalm.token', 'saved')
@@ -38,6 +39,47 @@ const pointer = (el: Element, type: string, pointerId: number) =>
 const mediaSent = (socket: FakeSocket) => socket.sent.filter((m) => m.t === 'media').map((m) => `${m.key} ${m.op}`)
 
 describe('MediaView', () => {
+  it('releases seeking and repeating controls when their pointer capture is lost', async () => {
+    const { socket, view } = await mediaView()
+    const rewind = view.find('button[aria-label="Rewind"]').element
+    pointer(rewind, 'pointerdown', 1)
+    pointer(rewind, 'lostpointercapture', 2)
+    expect(mediaSent(socket)).toEqual(['rewind down'])
+    pointer(rewind, 'lostpointercapture', 1)
+    expect(mediaSent(socket)).toEqual(['rewind down', 'rewind up'])
+    pointer(rewind, 'pointerup', 1)
+    expect(mediaSent(socket)).toEqual(['rewind down', 'rewind up'])
+    const brighter = view.find('button[aria-label="Display brightness up"]').element
+    pointer(brighter, 'pointerdown', 1)
+    pointer(brighter, 'lostpointercapture', 1)
+    const count = mediaSent(socket).length
+    vi.advanceTimersByTime(1000)
+    expect(mediaSent(socket)).toHaveLength(count)
+    view.unmount()
+  })
+
+  it.each(['pause', 'hide', 'unmount'] as const)('cancels a delayed volume update on %s', async mode => {
+    const { socket, view } = await mediaView()
+    socket.receive({ t: 'volume', value: 0.5, muted: false })
+    await nextTick()
+    const slider = view.find('input[type="range"]').element as HTMLInputElement
+    for (const value of ['0.6', '0.7']) {
+      slider.value = value
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    const sent = socket.sent.filter(message => message.t === 'volume').length
+    expect(sent).toBeLessThan(2)
+    if (mode === 'pause') {
+      socket.receive({ t: 'paused', paused: true })
+      socket.receive({ t: 'paused', paused: false })
+    } else if (mode === 'hide') {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      document.dispatchEvent(new Event('visibilitychange'))
+    } else view.unmount()
+    vi.advanceTimersByTime(100)
+    expect(socket.sent.filter(message => message.t === 'volume')).toHaveLength(sent)
+    if (mode !== 'unmount') view.unmount()
+  })
   it('works from a keyboard or screen reader, without doubling a tap', async () => {
     const { socket, view } = await mediaView()
     const play = view.find('button[aria-label="Play or pause"]')

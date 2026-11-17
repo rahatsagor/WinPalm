@@ -13,6 +13,7 @@ import type { MediaKey } from '@/lib/protocol'
 const held = ref<MediaKey | null>(null)
 let holder: number | null = null
 let release: (() => void) | null = null
+let sendTimer: ReturnType<typeof setTimeout> | undefined
 
 function down(key: MediaKey, event: PointerEvent) {
   event.preventDefault()
@@ -53,13 +54,14 @@ watch(
 
 // The finger may still be down when the tab changes; its lift never arrives.
 function letGoAll() {
+  clearTimeout(sendTimer)
+  sendTimer = undefined
   letGo()
   dragging.value = false
 }
 onDeactivated(letGoAll)
 onBeforeUnmount(letGoAll)
 onPageHidden(letGoAll)
-let sendTimer: ReturnType<typeof setTimeout> | undefined
 let lastSent = 0
 function setVolume(value: number) {
   local.value = value
@@ -72,7 +74,6 @@ function setVolume(value: number) {
   if (now - lastSent > 60) flush()
   else sendTimer = setTimeout(flush, 60)
 }
-onBeforeUnmount(() => clearTimeout(sendTimer))
 
 const muted = computed(() => state.volume?.muted ?? false)
 const VolumeIcon = computed(() => (muted.value || local.value === 0 ? VolumeX : local.value < 0.5 ? Volume1 : Volume2))
@@ -113,6 +114,7 @@ const extra = [
           @pointerdown="down(item.key, $event)"
           @pointerup="up(item.key, $event)"
           @pointercancel="up(item.key, $event)"
+          @lostpointercapture="up(item.key, $event)"
           @click="activate(item.key, $event)"
         >
           <span v-if="!item.icon" class="flex items-center">
@@ -159,6 +161,7 @@ const extra = [
               @pointerdown="down(key, $event)"
               @pointerup="up(key, $event)"
               @pointercancel="up(key, $event)"
+              @lostpointercapture="up(key, $event)"
               @click="activate(key, $event)"
             >
               {{ key === 'volumeUp' ? '+' : '−' }}
@@ -179,6 +182,7 @@ const extra = [
           @pointerdown="down(item.key, $event)"
           @pointerup="up(item.key, $event)"
           @pointercancel="up(item.key, $event)"
+          @lostpointercapture="up(item.key, $event)"
           @click="activate(item.key, $event)"
         >
           <component :is="item.icon" :size="19" class="shrink-0 text-muted" />

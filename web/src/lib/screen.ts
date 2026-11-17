@@ -342,7 +342,7 @@ onMessage(message => {
 // Windows refreshes Features as foreground apps change. Compare the individual
 // values: a getter returning a new array also fires for identical replacements
 // of the Features object, unnecessarily stopping an authorized live stream.
-watch([() => connection.status, () => connection.paused, () => connection.features.display], ([status, paused]) => {
+watch([() => connection.status, () => connection.paused, () => connection.features.display], ([status, paused, display], previous) => {
   if (status !== 'connected' || paused) {
     cancelAccessRequest()
     listId = null
@@ -350,7 +350,13 @@ watch([() => connection.status, () => connection.paused, () => connection.featur
     stopViewing(paused ? 'Screen mirroring is paused on the PC.' : 'Reconnect to the PC, then start viewing again.')
     screen.displays = []
     screen.canRequest = false
-  } else if (visible() && accessId === null) refreshDisplays()
+  } else if (visible() && accessId === null) {
+    // A capability change invalidates an in-flight list. Otherwise the pending
+    // refresh would hide global disable from refreshDisplays and keep the peer
+    // open until the old query answered or timed out.
+    if (display !== previous[2]) { listId = null; clearTimeout(listTimeout) }
+    refreshDisplays()
+  }
 }, { flush: 'sync' })
 
 document.addEventListener('visibilitychange', () => {

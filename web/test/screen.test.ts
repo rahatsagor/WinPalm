@@ -137,6 +137,24 @@ describe('receive-only display viewing', () => {
     expect(socket.sent.filter(message => message.t === 'displayStart')).toHaveLength(1)
   })
 
+  it('closes a disabled view immediately even during a pending list refresh', async () => {
+    const socket = connect()
+    library.activateScreen(video); list(socket); await library.startViewing()
+    const rtc = FakePeer.all[0]!
+    library.refreshDisplays()
+    const stale = socket.sent.filter(message => message.t === 'displays').at(-1)!
+    socket.receive({ t: 'features', features: { ...connection.state.features, display: false } })
+    expect(rtc.closed).toBe(true)
+    expect(socket.sent.filter(message => message.t === 'displayStop')).toHaveLength(1)
+    const current = socket.sent.filter(message => message.t === 'displays').at(-1)!
+    expect(current.id).not.toBe(stale.id)
+    socket.receive({ t: 'displays', id: stale.id, displays: [{ id: 'stale', name: 'Stale', width: 1, height: 1, main: true }] })
+    expect(library.screen.status).toBe('loading')
+    expect(library.screen.displays.some(display => display.id === 'stale')).toBe(false)
+    socket.receive({ t: 'displays', id: current.id, displays: [], canRequest: true })
+    expect(library.screen.canRequest).toBe(true)
+  })
+
   it('keeps an active view when its existing grant is reported again', async () => {
     const socket = connect()
     library.activateScreen(video); list(socket); await library.startViewing()
