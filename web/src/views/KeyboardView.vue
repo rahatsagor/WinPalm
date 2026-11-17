@@ -132,6 +132,7 @@ const customLayout = computed(() => {
         <Segmented
           v-model="choice"
           class="min-w-0 flex-1 py-0!"
+          aria-label="Keyboard layout"
           :options="[
             { value: 'pc', label: 'PC' },
             { value: 'custom', label: 'Custom' },

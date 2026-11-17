@@ -39,6 +39,12 @@
 
 ### Phone client
 
+- Organize Settings into Trackpad, Gestures, Keyboard, Display and Deck tabs.
+  Device preferences and actions follow the feature settings. Dictation setup
+  lives in Keyboard, and all supported settings and actions are visible.
+- Enlarge touch targets and improve keyboard navigation in settings and
+  dialogs. Match trackpad hints to the enabled gestures, add recovery actions
+  to empty app views, and share display preferences with Display options.
 - Release click-bar and Media controls when pointer capture is lost. Cancel
   pending volume updates on pause, hiding or leaving Media, and run pause
   cleanup synchronously so rapid pause/resume cannot skip it.
