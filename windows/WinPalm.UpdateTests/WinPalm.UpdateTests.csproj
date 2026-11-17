@@ -7,6 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="../WinPalm/Services/BundledNotices.cs" Link="Services/BundledNotices.cs" />
+    <Compile Include="../WinPalm/Services/ClipboardRestore.cs" Link="Services/ClipboardRestore.cs" />
     <Compile Include="../WinPalm/Services/ReleaseUpdates.cs" Link="Services/ReleaseUpdates.cs" />
     <Compile Include="../WinPalm/Services/UpdatePackage.cs" Link="Services/UpdatePackage.cs" />
     <Compile Include="../WinPalm/Services/PcmAudioStream.cs" Link="Services/PcmAudioStream.cs" />
@@ -14,7 +17,6 @@
     <Compile Include="../WinPalm/Services/ControlPauseState.cs" Link="Services/ControlPauseState.cs" />
     <Compile Include="../WinPalm/Services/DisplayPreference.cs" Link="Services/DisplayPreference.cs" />
     <Compile Include="../WinPalm/Services/DisplayPower.cs" Link="Services/DisplayPower.cs" />
-    <Compile Include="../WinPalm/Services/ClipboardRestore.cs" Link="Services/ClipboardRestore.cs" />
     <Compile Include="../WinPalm/Services/SessionAvailability.cs" Link="Services/SessionAvailability.cs" />
     <Compile Include="../WinPalm/UI/LayoutMath.cs" Link="UI/LayoutMath.cs" />
   </ItemGroup>

@@ -7,7 +7,7 @@ namespace WinPalm.Services;
 internal static class UpdatePackage
 {
   internal static readonly string[] OwnedItems = ["WinPalm.exe", "winpalm_core.dll", "web", "Resources", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "README.md", "SECURITY.md", "Test-WinPalm.cmd"];
-  private static readonly string[] RequiredFiles = ["WinPalm.exe", "winpalm_core.dll", "web/index.html", "web/source.zip", "web/LICENSE.txt", "Resources/WinPalm.ico", "LICENSE"];
+  private static readonly string[] RequiredFiles = ["WinPalm.exe", "winpalm_core.dll", "web/index.html", "web/source.zip", "web/LICENSE.txt", "Resources/WinPalm.ico", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"];
 
   internal static void Extract(string archivePath, string destination, CancellationToken cancellation = default)
   {

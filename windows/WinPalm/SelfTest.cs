@@ -14,6 +14,7 @@ internal static class SelfTest
     Preferences.UseTestDirectory(directory);
     try
     {
+      BundledNotices.Verify(AppContext.BaseDirectory); checks.Add("bundled app, native, runtime, phone and installer license notices");
       Preferences.Load(); checks.Add("private data ACL");
       var preferences = new Preferences { Port = 0, Dictation = false };
       preferences.Save(); preferences.Save(); checks.Add("atomic preference replacement");

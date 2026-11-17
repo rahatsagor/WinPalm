@@ -41,7 +41,7 @@ function Install-Setup {
 }
 try {
     Install-Setup
-    foreach ($File in @('WinPalm.exe','winpalm_core.dll','web/index.html','web/source.zip','Resources/WinPalm.ico','NSIS-LICENSE.txt','Uninstall.exe')) {
+    foreach ($File in @('WinPalm.exe','winpalm_core.dll','web/index.html','web/source.zip','Resources/WinPalm.ico','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','NSIS-LICENSE.txt','Uninstall.exe')) {
         Require (Test-Path (Join-Path $Install $File) -PathType Leaf) "setup installs $File"
     }
     $Installed = Get-ItemProperty $Registration
