@@ -394,7 +394,7 @@ internal sealed class MainWindow : Form
     }
     else if (section == "Devices" && !modalOpen)
     {
-      var digest = connected.GetRawText() + "|" + state.GetProperty("trusted").GetRawText();
+      var digest = connected.GetRawText() + "|" + state.GetProperty("trusted").GetRawText() + "|" + state.GetProperty("trustStoreIntact").GetBoolean();
       if (digest != lastDevicesDigest)
       {
         lastDevicesDigest = digest;
@@ -577,7 +577,8 @@ internal sealed class MainWindow : Form
     if (host.Snapshot.ValueKind != JsonValueKind.Object) return;
     var connected = host.Snapshot.GetProperty("connected").EnumerateArray().ToArray();
     var devices = host.Snapshot.GetProperty("trusted").EnumerateArray().ToArray();
-    lastDevicesDigest = host.Snapshot.GetProperty("connected").GetRawText() + "|" + host.Snapshot.GetProperty("trusted").GetRawText();
+    var trustIntact = host.Snapshot.GetProperty("trustStoreIntact").GetBoolean();
+    lastDevicesDigest = host.Snapshot.GetProperty("connected").GetRawText() + "|" + host.Snapshot.GetProperty("trusted").GetRawText() + "|" + trustIntact;
 
     var activeCard = new SurfaceCard("Connected Now", "Phones currently controlling this PC. Disconnecting closes the live session without revoking trust.");
     if (connected.Length == 0)
@@ -619,7 +620,7 @@ internal sealed class MainWindow : Form
           disconnectBtn), dividerAbove: i > 0);
         if (!session.GetProperty("remembered").GetBoolean())
           activeCard.AddRow(new SettingToggleRow(
-            "Allow screen viewing",
+            "Allow screen mirroring",
             "Screen access for this temporary connection only.",
             session.GetProperty("displayAllowed").GetBoolean(),
             allowed => Action(() => { CoreBridge.Call(new { op = "sessionDisplayAllowed", id = sessionId, allowed }); host.RefreshSoon(); }),
@@ -629,11 +630,11 @@ internal sealed class MainWindow : Form
     page.AddBlock(activeCard);
 
     PalmButton? forgetAllBtn = null;
-    if (devices.Length > 0)
+    if (devices.Length > 0 || !trustIntact)
     {
       forgetAllBtn = new PalmButton("Remove all…", () =>
       {
-        if (ShowModal(() => PalmDialog.Confirm(this, "Remove all paired devices?", "Every paired phone will be disconnected and its saved phone settings on this PC will be deleted.", "Remove all", destructive: true)))
+        if (ShowModal(() => PalmDialog.Confirm(this, "Remove all paired devices?", "Every paired phone will be disconnected and its saved phone settings on this PC will be deleted. This also replaces an unreadable or newer paired-device file. Pair each phone again afterward.", "Remove all", destructive: true)))
           Action(() => { CoreBridge.Call(new { op = "forgetAll" }); host.RefreshSoon(); Navigate("Devices"); });
       }, ButtonTone.Danger, IconKind.Trash, compact: true);
     }
@@ -643,7 +644,15 @@ internal sealed class MainWindow : Form
       "Removing a device revokes its pairing token and deletes its custom keyboards and gesture preferences saved on this PC.",
       forgetAllBtn);
 
-    if (devices.Length == 0)
+    if (!trustIntact)
+    {
+      trustedCard.AddRow(new SettingActionRow(
+        "Paired devices could not be loaded",
+        "The saved file is unreadable or belongs to a newer WinPalm version. Pairings and phone tokens are being preserved. Quit and reopen the app after restoring access or using the matching version. To start over intentionally, back up the data folder in Advanced, then choose Remove all.",
+        IconKind.Warning,
+        BadgeTone.Warning), dividerAbove: false);
+    }
+    else if (devices.Length == 0)
     {
       var openConnect = new PalmButton("Go to Connect", () => Navigate("Connect"), ButtonTone.Primary, IconKind.Connect, compact: true);
       trustedCard.AddRow(new SettingActionRow(
@@ -689,8 +698,8 @@ internal sealed class MainWindow : Form
           renameBtn,
           removeBtn), dividerAbove: i > 0);
         trustedCard.AddRow(new SettingToggleRow(
-          "Allow screen viewing",
-          $"Let {name} view one monitor when screen viewing is enabled in General.",
+          "Allow screen mirroring",
+          $"Let {name} view one monitor when screen mirroring is enabled in General.",
           device.GetProperty("displayAllowed").GetBoolean(),
           allowed => Action(() => { CoreBridge.Call(new { op = "displayAllowed", deviceId = id, allowed }); host.RefreshSoon(); }),
           IconKind.Shield, BadgeTone.Neutral));

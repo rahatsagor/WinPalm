@@ -32,7 +32,7 @@ const reload = () => location.reload()
 const busy = computed(() => state.status === 'connecting' || state.status === 'pending')
 const mac = computed(() => macName.value || 'your PC')
 // Disconnected from the PC while still paired.
-const canReconnect = computed(() => state.status === 'idle' && !!token.get())
+const canReconnect = computed(() => !!token.get() && (state.status === 'idle' || (state.status === 'denied' && state.denied?.reason === 'busy')))
 const disconnected = computed(() => (canReconnect.value && !state.byeReason ? 'Disconnected from the PC.' : ''))
 
 const error = computed(() => {
@@ -52,7 +52,7 @@ const error = computed(() => {
     case 'blocked':
       return `Too many attempts. Try again in ${state.denied.retryAfter ?? 30} seconds.`
     case 'busy':
-      return 'The PC is already handling a request from this device.'
+      return `The PC can’t accept this connection right now. Try again in ${state.denied.retryAfter ?? 5} seconds. If this keeps happening, quit and reopen WinPalm on the PC.`
     case 'incompatible':
       return 'This page doesn’t match the WinPalm version on the PC. Reload the page.'
     default:

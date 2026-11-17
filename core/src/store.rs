@@ -25,6 +25,16 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Option<T> {
 
 /// Like [`load`], but tells a missing file from one that couldn't be used.
 pub fn try_load<T: DeserializeOwned>(path: &Path) -> Loaded<T> {
+    read(path, true)
+}
+
+/// Trust files must remain in place, including on subsequent launches. Moving
+/// a bad file away would make the next launch mistake it for an empty store.
+pub fn try_load_preserving<T: DeserializeOwned>(path: &Path) -> Loaded<T> {
+    read(path, false)
+}
+
+fn read<T: DeserializeOwned>(path: &Path, quarantine_bad: bool) -> Loaded<T> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Loaded::Missing,
@@ -39,7 +49,9 @@ pub fn try_load<T: DeserializeOwned>(path: &Path) -> Loaded<T> {
             // serde's message can quote file contents, such as a deck snippet.
             let kind = format!("{:?}", err.classify());
             tracing::error!(path = %path.display(), kind, line = err.line(), column = err.column(), "ignoring corrupt file");
-            quarantine(path);
+            if quarantine_bad {
+                quarantine(path);
+            }
             Loaded::Unusable
         }
     }
