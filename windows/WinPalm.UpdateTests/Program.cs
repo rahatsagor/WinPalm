@@ -79,6 +79,7 @@ sealed class Tests
       Sync("display power cannot bypass overlapping lock or sleep", DisplayPowerOverlaps);
       Sync("display power notification validates setting length and state", DisplayPowerNotifications);
       Sync("initial session state reads locked disconnected and invalid data", InitialSessionState);
+      Sync("session queries tolerate unavailable Remote Desktop Services safely", SessionQueryFallback);
       Sync("session reconciliation preserves manual and sleep pauses", SessionReconciliation);
       Sync("temporary paste restores an empty clipboard and cleanup is retryable", ClipboardCleanup);
       Sync("app activation waits for the foreground confirmation", ActivationCompletion);
@@ -146,6 +147,25 @@ sealed class Tests
     Throws<IOException>(() => ownership.End(30, () => throw new IOException("clipboard busy")));
     ownership.End(30, Restore);
     Equal("old text", clipboard); Equal(2, restored);
+  }
+
+  private void SessionQueryFallback()
+  {
+    var fallbackCalls = 0;
+    bool Interactive() { fallbackCalls++; return true; }
+    Equal((ControlPauseReason)0, SessionAvailability.Read(() => null, Interactive));
+    Equal(1, fallbackCalls);
+    Equal(ControlPauseReason.SessionLocked, SessionAvailability.Read(() => null, () => false));
+    foreach (var known in new[] { (ControlPauseReason)0, ControlPauseReason.SessionLocked, ControlPauseReason.SessionDisconnected })
+      Equal(known, SessionAvailability.Read(() => known, () => throw new InvalidOperationException("known state must win")));
+    True(SessionAvailability.IsInteractiveDesktop("Default", true));
+    False(SessionAvailability.IsInteractiveDesktop("Default", false));
+    False(SessionAvailability.IsInteractiveDesktop("Winlogon", true));
+    False(SessionAvailability.IsInteractiveDesktop(null, true));
+    var state = new ControlPauseState();
+    Equal(true, state.ReconcileSession(SessionAvailability.Read(() => null, () => false), false));
+    Equal(false, state.ReconcileSession(SessionAvailability.Read(() => null, Interactive), true));
+    False(state.Active);
   }
 
   private void SessionReconciliation()
