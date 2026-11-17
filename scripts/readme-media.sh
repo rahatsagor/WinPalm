@@ -61,12 +61,13 @@ import sys
 
 source, output = map(pathlib.Path, sys.argv[1:])
 digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+names = ("hero", "trackpad", "keyboard", "display", "custom", "deck", "apps-media", "voice")
+previews = sorted([f"{name}.webp" for name in names] + ["film.jpg"])
 record = {
     "sourceFile": source.name,
     "sourceSha256": digest(source),
     "posterSeconds": 12.5,
-    "outputs": {path.name: digest(path) for path in sorted(output.iterdir())
-                if path.suffix == ".webp" or path.name == "film.jpg"},
+    "outputs": {name: digest(output / name) for name in previews},
 }
 (output / "manifest.json").write_text(json.dumps(record, indent=2) + "\n")
 PY

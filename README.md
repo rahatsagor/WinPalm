@@ -33,6 +33,8 @@ Screen mirroring, trackpad, keyboard and shortcut deck, together in your browser
 
 <sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 101-second launch film</a> · <a href="https://winpalm.rsapplication.com">Try the interactive demo</a></sub>
 
+<sub>The film and demo preview the upcoming screen mirroring and phone Settings update. The latest Windows download is 0.3.2.</sub>
+
 </div>
 
 ## Using a Mac? Meet CmdPalm.
@@ -251,7 +253,24 @@ sleeps. No desktop audio or screen recording.
 
 <sub>Animated previews from the updated 101-second launch film, including screen mirroring and the redesigned Windows interface. Phone UI and illustrated PC responses; no live Windows footage.</sub>
 
-Pair multiple phones and tablets. Settings, custom keyboards and gestures are backed up on the PC for each device. **Copy settings from another device** lets you select individual settings sections and keyboards. Deck pages are shared across paired devices.
+### Phone settings and devices
+
+Tap the phone’s **Settings** gear to open **Trackpad**, **Gestures**, **Keyboard**,
+**Display** and **Deck**. The connection card shows the PC name, WinPalm version,
+connection status and latency. Use **Keyboard → Dictation setup** for microphone
+and trusted HTTPS help. **Display** sets viewing quality, controls and preview
+space. **Deck** sets button size on this device.
+
+<p>
+<img src="docs/media/phone-settings-trackpad.webp" width="260" alt="Phone Settings showing the PC connection card, five feature tabs and Trackpad preferences" />
+<img src="docs/media/phone-settings-keyboard.webp" width="260" alt="Phone Settings with the Keyboard tab and its layout and typing preferences" />
+</p>
+
+Scroll below the selected feature to name the device, change its appearance,
+manage backups or disconnect. Remembered devices keep a settings backup on
+the PC. Choose **Copy settings from another device** under **Saved setup** to
+bring over individual setting groups and custom keyboards. Deck pages are
+shared by devices paired with the same PC.
 
 On the phone, **Settings → Back up or restore this device** exports your settings and custom keyboards to a JSON file. Review a backup before restoring it. Pairing tokens are excluded, and restoring preserves the current device's name and pairing. Shared Deck files are exported separately from the PC's Deck settings. If the PC cannot save a settings backup, WinPalm retries and offers **Retry saving to the PC** in the phone's Settings.
 
@@ -325,7 +344,7 @@ You can also download and run the latest **[WinPalm-Setup.exe](https://github.co
 Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for installation, pairing, HTTPS, Tailscale remote access, voice typing and settings. The **[guides](https://winpalm.rsapplication.com/guides/)** cover everyday workflows.
 
 - **Phone cannot connect:** check the shared LAN or VPN, the intended Windows network profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
-- **Microphone unavailable:** export the public certificate from Phone setup, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
+- **Microphone unavailable:** open **Settings → Keyboard → Dictation setup** on the phone. Export the public certificate from **Phone setup → Encrypted HTTPS & Voice Typing** on the PC, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
 - **Paired devices cannot be loaded:** quit and reopen WinPalm after restoring access to its data folder or using the version that wrote the file. Phone tokens are retained. To intentionally start over, back up the data folder, then use **Devices → Remove all** and pair again.
 - **HTTPS authority changed:** damaged or inconsistent certificate files may require a new local authority. Verify its new fingerprint, trust the new public certificate on each phone and remove the obsolete authority. An ordinary server-certificate renewal keeps the existing authority.
 - **Speech will not start:** choose **General → Check setup** on Windows. Install or repair a compatible offline speech language, then restart WinPalm. Recognition support and quality depend on the installed recognizer.
@@ -348,7 +367,7 @@ Builds, dependencies, caches and local reports go to `../winpalm-dev/`. The sour
 
 Future releases follow CmdPalm's routine: update the changelog, run **`bun scripts/bump-version.ts VERSION`**, commit and push, then tag **`vVERSION`**. The release workflow runs native x64/ARM64 checks, builds setup, verifies checksums and publishes the release. See [CONTRIBUTING.md](CONTRIBUTING.md), [the release guide](docs/RELEASING.md) and [the protocol](docs/PROTOCOL.md).
 
-When the launch film changes, regenerate the README animations and poster with **`scripts/readme-media.sh ../winpalm-dev/launch-film/renders/winpalm-launch-display-2026-11-17-v2.mp4`**. The generated [media manifest](docs/media/manifest.json) records the master and preview hashes. Publish the matching film and posters on the website together. The current reviewed 101-second film includes Display, screen mirroring and permission controls.
+When the launch film changes, regenerate the README animations and poster with **`scripts/readme-media.sh ../winpalm-dev/launch-film/renders/winpalm-launch-settings-2026-11-18.mp4`**. The [film manifest](docs/media/manifest.json) records the master and preview hashes. The [Settings capture manifest](docs/media/settings-manifest.json) records the phone client commit and screenshots. Publish the matching film and posters on the website together.
 
 ## License
 

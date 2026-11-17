@@ -1,0 +1,18 @@
+{
+  "appCommit": "6799ba268cf92e04fb7a1206d0fce652b9eb9834",
+  "fixture": "capture-ui.mjs; simulated WebSocket host named Windows PC; blank generated canvas stream",
+  "outputs": {
+    "phone-settings-trackpad.webp": {
+      "sha256": "d242abc0a2c849350868395267e513727e2469d6678165d78254fa49e421c412",
+      "sourceSha256": "692e634ef709ab4f2db80b3620ae1fb46d7cd328ac30e7f66026f7aa0d1075b8",
+      "width": 520,
+      "height": 1064
+    },
+    "phone-settings-keyboard.webp": {
+      "sha256": "47f6402e9b892ccf3de81744e5cf016b23d5c3e0af3354298bb3b2cc5f15fcfc",
+      "sourceSha256": "23e7f2879e3d3c547097b98e6a1977edf29095f4917453fe0e267a732655fb04",
+      "width": 520,
+      "height": 1064
+    }
+  }
+}
