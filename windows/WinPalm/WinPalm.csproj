@@ -15,6 +15,7 @@
     <Version>0.3.2</Version>
     <Company>RS Application</Company>
     <Product>WinPalm</Product>
+    <Description>Phone trackpad, keyboard, shortcut Deck and screen mirroring for Windows.</Description>
     <Copyright>Copyright © RS Application. AGPL-3.0-only.</Copyright>
     <PublishTrimmed>false</PublishTrimmed>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -32,5 +33,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Resources\WinPalm.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 </Project>

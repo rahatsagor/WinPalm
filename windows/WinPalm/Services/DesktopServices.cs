@@ -86,6 +86,19 @@ internal sealed class DesktopServices : IDisposable
     try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); return true; }
     catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { Diagnostics.Record(error); return false; }
   }
+  internal static bool OpenNotices()
+  {
+    try
+    {
+      Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe"))
+      {
+        UseShellExecute = false,
+        ArgumentList = { Path.Combine(AppContext.BaseDirectory, BundledNotices.FileName) }
+      });
+      return true;
+    }
+    catch (System.ComponentModel.Win32Exception error) { Diagnostics.Record(error); return false; }
+  }
   /// A Settings URI, or "firewall" for the firewall's allowed-apps list.
   internal static bool OpenSetting(string target)
   {

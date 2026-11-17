@@ -49,7 +49,7 @@ function peInfo(file: string) {
 const payloads = resolve(values.payloads), output = resolve(values.output)
 for (const [arch, machine] of [['x64', 0x8664], ['arm64', 0xaa64]] as const) {
   const directory = resolve(payloads, arch)
-  for (const file of ['WinPalm.exe', 'winpalm_core.dll', 'web/index.html', 'web/source.zip', 'web/LICENSE.txt', 'Resources/WinPalm.ico', 'LICENSE'])
+  for (const file of ['WinPalm.exe', 'winpalm_core.dll', 'web/index.html', 'web/source.zip', 'web/LICENSE.txt', 'Resources/WinPalm.ico', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'])
     if (!existsSync(resolve(directory, file))) throw new Error(`Incomplete ${arch} payload: ${file}`)
   const app = peInfo(resolve(directory, 'WinPalm.exe'))
   if (app.machine !== machine || app.version !== `${version}.0`) throw new Error(`${arch} payload must be native WinPalm ${version}, got ${JSON.stringify(app)}`)

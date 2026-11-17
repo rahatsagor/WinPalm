@@ -1163,14 +1163,15 @@ internal sealed class MainWindow : Form
     var docsBtn = new PalmButton("Documentation", () => DesktopServices.Open(DocsUrl), ButtonTone.Secondary, IconKind.External, compact: true);
     var repoBtn = new PalmButton("GitHub", () => DesktopServices.Open(RepoUrl), ButtonTone.Secondary, IconKind.External, compact: true);
     var licenseBtn = new PalmButton("Open license", () => DesktopServices.Open(Path.Combine(AppContext.BaseDirectory, "LICENSE")), ButtonTone.Secondary, IconKind.Folder, compact: true);
+    var noticesBtn = new PalmButton("License notices", () => DesktopServices.OpenNotices(), ButtonTone.Secondary, IconKind.Folder, compact: true);
     var checkBtn = new PalmButton("Check for updates…", async () => { ShowUpdates(); await host.Updates.CheckAsync(); }, ButtonTone.Primary, IconKind.Updates, compact: true);
 
-    page.AddBlock(new AboutHeroCard(versionLine, siteBtn, docsBtn, repoBtn, licenseBtn, checkBtn));
+    page.AddBlock(new AboutHeroCard(versionLine, siteBtn, docsBtn, repoBtn, licenseBtn, noticesBtn, checkBtn));
 
     var detailsCard = new SurfaceCard();
     detailsCard.AddRow(new SettingActionRow(
       "Private by design",
-      "WinPalm runs entirely on your local network with no accounts, analytics, or cloud services. Voice typing uses offline Windows speech recognizers installed on this PC.",
+      "WinPalm brings trackpad, keyboard, Deck and screen mirroring to your phone over your own network, with no accounts, analytics, or cloud relay. Voice typing uses offline Windows speech recognizers installed on this PC.",
       IconKind.Shield,
       BadgeTone.Good), dividerAbove: false);
     detailsCard.AddRow(new SettingActionRow(

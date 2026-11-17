@@ -38,6 +38,7 @@ try {
 } finally { Pop-Location; Remove-Item Env:WINPALM_WEB_OUT -ErrorAction SilentlyContinue }
 Push-Location $Root
 try {
+    $env:WINPALM_WEB_PACKAGE = Join-Path $Web 'package.json'
     Run { rustup target add $Target }
     if (!$SkipChecks) {
         Run { bun scripts/release-notes.ts check ((Get-Content (Join-Path $Root 'web/package.json') -Raw | ConvertFrom-Json).version) }
@@ -50,7 +51,12 @@ try {
         Run { cargo test --locked --all-targets }
     }
     Run { cargo build --locked --release --target $Target }
+    Run { cargo fetch --locked --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc }
     Run { dotnet publish windows/WinPalm/WinPalm.csproj -c Release -r $Rid --self-contained true -p:RestoreLockedMode=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:CopyOutputSymbolsToPublishDirectory=false --artifacts-path (Join-Path $Cache 'dotnet') --output $Output }
+    $Assets = & dotnet msbuild windows/WinPalm/WinPalm.csproj -getProperty:ProjectAssetsFile "-p:ArtifactsPath=$(Join-Path $Cache 'dotnet')"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not locate restored dependency metadata.' }
+    Run { bun scripts/license-notices.ts --output THIRD_PARTY_NOTICES.md --nuget-assets $Assets --check }
+    if (!(Test-Path (Join-Path $Output 'THIRD_PARTY_NOTICES.md'))) { throw 'Missing bundled license notices.' }
     # Serve the exact working source alongside the phone UI (AGPL section 13).
     $Version = (Get-Content (Join-Path $Root 'web/package.json') -Raw | ConvertFrom-Json).version
     $SourceArchive = Join-Path $Dev "artifacts/WinPalm-$Version-source.zip"
@@ -93,5 +99,5 @@ try {
         }
         Run { bun scripts/build-installer.ts --payloads $Payloads --output (Join-Path $Dev "artifacts/WinPalm-$Version-Setup.exe") }
     }
-} finally { Pop-Location }
+} finally { Pop-Location; Remove-Item Env:WINPALM_WEB_PACKAGE -ErrorAction SilentlyContinue }
 Write-Output "Windows package: $Output"

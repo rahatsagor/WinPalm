@@ -13,6 +13,7 @@ if (args is ["--package", var archive, var architecture, var version])
   try
   {
     UpdatePackage.Extract(archive, temporary);
+    BundledNotices.Verify(temporary);
     if (OperatingSystem.IsWindows())
     {
       UpdatePackage.ValidateBinaries(temporary, architecture, Version.Parse(version));
@@ -46,6 +47,7 @@ sealed class Tests
     Directory.CreateDirectory(root);
     try
     {
+      Sync("bundled notices resource includes the actual app and dependency families", () => BundledNotices.Verify(AppContext.BaseDirectory));
       Sync("release chooses exact architecture assets", ReleaseSelection);
       Sync("release rejects draft prerelease old and malformed versions", InvalidReleases);
       await Async("release rejects unavailable and foreign URLs", InvalidAssetUrls);
@@ -488,9 +490,14 @@ sealed class Tests
 
   private void MissingRequiredFile()
   {
-    var entries = RequiredEntries().Where(e => e.Name != "web/source.zip").ToArray();
-    var archive = MakeZip("extract-missing", entries);
-    Throws<InvalidDataException>(() => UpdatePackage.Extract(archive, Path.Combine(root, "extracted-missing")));
+    foreach (var missing in RequiredEntries())
+    {
+      var entries = RequiredEntries().Where(e => e.Name != missing.Name).ToArray();
+      var archive = MakeZip("extract-missing-" + Guid.NewGuid().ToString("N"), entries);
+      var destination = Path.Combine(root, "extracted-missing-" + Guid.NewGuid().ToString("N"));
+      Throws<InvalidDataException>(() => UpdatePackage.Extract(archive, destination));
+      False(Directory.Exists(destination));
+    }
   }
 
   private void UnsafeArchivePaths()
@@ -594,7 +601,7 @@ sealed class Tests
 
   private static ZipEntryData[] RequiredEntries() => [
     new("WinPalm.exe", "app"), new("winpalm_core.dll", "core"), new("web/index.html", "index"),
-    new("web/source.zip", "source"), new("web/LICENSE.txt", "license"), new("Resources/WinPalm.ico", "icon"), new("LICENSE", "license")];
+    new("web/source.zip", "source"), new("web/LICENSE.txt", "license"), new("Resources/WinPalm.ico", "icon"), new("LICENSE", "license"), new("NOTICE", "notice"), new("THIRD_PARTY_NOTICES.md", "notices")];
 
   private static ReleaseUpdates.Release? Parse(string json, Version? current = null, string architecture = "x64")
   {
