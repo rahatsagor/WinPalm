@@ -6,7 +6,6 @@ import { ACTION_KINDS, MEDIA, SYSTEM, defaultAction, describe } from '@/lib/acti
 import { labels, state } from '@/lib/connection'
 import { LIMITS } from '@/lib/deck'
 import { Mod, type Action, type AppOp, type MediaKey, type MouseButton, type SystemAction } from '@/lib/protocol'
-import { settings } from '@/lib/settings'
 import { symbol } from '@/lib/symbols'
 import { plainPunctuation } from '@/lib/text'
 import AppIcon from './AppIcon.vue'
@@ -23,8 +22,7 @@ const kinds = computed(() =>
     if (k.kind === model.value.kind) return true
     if (props.exclude.includes(k.kind)) return false
     if (k.kind === 'sequence' && props.depth >= LIMITS.depth - 1) return false
-    if (k.kind === 'shell' && !state.features.shell) return false
-    return !k.advanced || settings.showAdvanced
+    return k.kind !== 'shell' || state.features.shell
   }))
 
 function setKind(kind: Action['kind']) {
@@ -101,8 +99,9 @@ const kindOf = (step: Action) => ACTION_KINDS.find((k) => k.kind === step.kind)
         v-for="k in kinds"
         :key="k.kind"
         type="button"
-        class="flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors"
+        class="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors"
         :class="model.kind === k.kind ? 'bg-accent text-accent-text' : 'bg-surface-3 text-muted'"
+        :aria-pressed="model.kind === k.kind"
         @click="setKind(k.kind)"
       >
         <component :is="symbol(k.symbol)" :size="15" />

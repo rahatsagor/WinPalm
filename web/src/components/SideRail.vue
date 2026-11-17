@@ -53,7 +53,7 @@ const emit = defineEmits<{ settings: [] }>()
         :aria-selected="settings.tab === tab.id"
         :aria-label="tab.label"
         class="grid size-11 place-items-center rounded-xl transition-colors"
-        :class="settings.tab === tab.id ? 'bg-accent-soft text-accent' : 'text-faint'"
+        :class="settings.tab === tab.id ? 'bg-accent-soft text-accent' : 'text-muted'"
         @click="selectTab(tab.id)"
       >
         <component :is="tab.icon" :size="21" :stroke-width="settings.tab === tab.id ? 2.2 : 1.8" />
@@ -62,7 +62,7 @@ const emit = defineEmits<{ settings: [] }>()
 
     <button
       type="button"
-      class="grid size-10 shrink-0 place-items-center rounded-full transition-[color,background-color,scale] duration-150 active:scale-90 active:bg-surface-3"
+      class="grid size-11 shrink-0 place-items-center rounded-full transition-[color,background-color,scale] duration-150 active:scale-90 active:bg-surface-3"
       :class="released ? 'bg-good/15 text-good' : 'text-muted'"
       aria-label="Release all keys and buttons"
       title="Release all keys and buttons"
@@ -73,7 +73,7 @@ const emit = defineEmits<{ settings: [] }>()
     </button>
     <button
       type="button"
-      class="grid size-10 shrink-0 place-items-center rounded-full text-muted transition-[scale] duration-150 active:scale-90 active:bg-surface-3"
+      class="grid size-11 shrink-0 place-items-center rounded-full text-muted transition-[scale] duration-150 active:scale-90 active:bg-surface-3"
       aria-label="Settings"
       @click="emit('settings')"
     >

@@ -1,9 +1,9 @@
 // The phone is receive-only. No getUserMedia, getDisplayMedia, WebCodecs,
 // secure-context requirement, or third-party ICE service is needed here.
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { onMessage, send, state as connection } from './connection'
 import { releaseAll } from './input'
-import type { DisplayInfo } from './protocol'
+import type { DisplayInfo, DisplayQuality } from './protocol'
 import { settings } from './settings'
 import { ScreenImageAssembler } from './screenImages'
 
@@ -17,6 +17,15 @@ export const screen = reactive({
   accessState: 'idle' as string,
   accessMessage: '',
   original: false,
+})
+
+export const displayControls = computed({
+  get: () => settings.displayControls,
+  set: (value) => {
+    if (value === settings.displayControls) return
+    releaseAll()
+    settings.displayControls = value
+  },
 })
 
 let video: HTMLVideoElement | null = null
@@ -175,6 +184,13 @@ export async function playViewing() {
       timeout = setTimeout(() => { if (current === generation) fail('Playback did not start. Tap View when you are ready to try again.') }, 30_000)
     }
   }
+}
+
+export function setViewingQuality(value: DisplayQuality) {
+  if (value === settings.displayQuality || (value === 'original' && !connection.features.displayOriginal)) return
+  const resume = screen.active && (screen.status === 'connecting' || screen.status === 'live')
+  settings.displayQuality = value
+  if (resume) void startViewing()
 }
 
 export async function startViewing() {

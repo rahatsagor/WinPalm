@@ -65,7 +65,7 @@ export function installHint(): string {
     // Android browsers install web apps only over HTTPS; over plain HTTP they
     // offer a shortcut that opens in a browser tab.
     if (!isSecureContext) {
-      return 'To install WinPalm as an app, use an encrypted connection: on the PC, open WinPalm Settings → Phone Setup → Encrypted Connection. Otherwise, add a shortcut (menu ⋮ → Add to Home screen) and use Full screen.'
+      return 'For an app window, use trusted HTTPS. On the PC, see Phone setup → Encrypted HTTPS & Voice Typing. You can also add a browser shortcut from ⋮ → Add to Home screen and use Full screen.'
     }
     if (display.installable) return 'Install WinPalm to open it full screen like an app.'
     if (/SamsungBrowser/.test(ua)) return 'Open the menu ☰, then Add page to → Home screen.'

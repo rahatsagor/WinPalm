@@ -13,6 +13,7 @@ import { settings } from '@/lib/settings'
 
 const filter = ref<'running' | 'all'>('running')
 const query = ref('')
+const search = computed(() => query.value.trim())
 const menu = ref<AppEntry | null>(null)
 
 onMounted(() => loadApps(true))
@@ -20,7 +21,7 @@ onMounted(() => loadApps(true))
 onActivated(() => loadApps())
 
 const apps = computed(() => {
-  const q = query.value.trim().toLowerCase()
+  const q = search.value.toLowerCase()
   let list = state.apps
   if (q) list = list.filter((a) => a.name.toLowerCase().includes(q))
   else if (filter.value === 'running') list = list.filter(isOpen)
@@ -70,15 +71,18 @@ function onClick(app: AppEntry) {
 <template>
   <div class="flex h-full flex-col">
     <div class="flex flex-col gap-2 px-3 pt-1 pb-2">
-      <label class="flex h-10 items-center gap-2 rounded-xl bg-surface-3 px-3 text-muted">
-        <Search :size="16" />
-        <input v-model="query" type="search" class="min-w-0 flex-1 bg-transparent text-[15px] text-text outline-none" placeholder="Search apps on the PC" />
-        <button type="button" class="grid size-7 place-items-center" aria-label="Refresh" @click="loadApps(true)"><RefreshCw :size="15" /></button>
-      </label>
+      <div class="flex min-h-11 items-center gap-1 rounded-xl bg-surface-3 text-muted">
+        <label class="flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-3">
+          <Search :size="16" class="shrink-0" aria-hidden="true" />
+          <input v-model="query" type="search" class="h-full min-w-0 flex-1 bg-transparent text-[16px] text-text outline-none" placeholder="Search apps on the PC" aria-label="Search apps on the PC" />
+        </label>
+        <button type="button" class="grid size-11 shrink-0 place-items-center rounded-xl active:bg-surface-2" aria-label="Refresh apps" @click="loadApps(true)"><RefreshCw :size="16" /></button>
+      </div>
       <Segmented
-        v-if="!query"
+        v-if="!search"
         v-model="filter"
         class="py-0!"
+        aria-label="Apps to show"
         :options="[
           { value: 'running', label: 'Open' },
           { value: 'all', label: 'All apps' },
@@ -110,9 +114,13 @@ function onClick(app: AppEntry) {
           <span class="line-clamp-2 w-full text-center text-[12px] leading-tight">{{ app.name }}</span>
         </button>
       </div>
-      <p v-if="apps.length === 0" class="py-16 text-center text-[15px] text-muted">
-        {{ query ? `No apps match “${query}”.` : 'No apps are open.' }}
-      </p>
+      <div v-if="apps.length === 0" class="py-12 text-center">
+        <p class="text-[15px] text-muted" role="status">
+          {{ search ? `No apps match “${search}”.` : filter === 'running' ? 'No apps are open.' : 'No apps found on the PC.' }}
+        </p>
+        <button v-if="search" type="button" class="empty-action" @click="query = ''">Clear search</button>
+        <button v-else-if="filter === 'running'" type="button" class="empty-action" @click="filter = 'all'">Show all apps</button>
+      </div>
       <p v-else class="pt-6 text-center text-[12px] text-faint">Tap to show or hide · Touch and hold for more</p>
     </div>
 
@@ -131,5 +139,8 @@ function onClick(app: AppEntry) {
 @reference '../style.css';
 .menu-row {
   @apply flex h-12 w-full items-center gap-3 rounded-xl bg-surface-2 px-4 text-left text-[15px];
+}
+.empty-action {
+  @apply mt-3 min-h-11 rounded-xl bg-surface-2 px-4 text-[14px] font-medium text-accent;
 }
 </style>

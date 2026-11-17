@@ -54,6 +54,7 @@ export interface Settings {
   showTouches: boolean
   rememberDevice: boolean
   deviceName: string
+  /** Retained in version 1 settings and backup signatures for older clients. */
   showAdvanced: boolean
   tab: Tab
   deckPage: string
