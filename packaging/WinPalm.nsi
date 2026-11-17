@@ -44,7 +44,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright RS Application. AGPL-3.0-
 !define MUI_UNICON "..\windows\WinPalm\Resources\WinPalm.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Your PC, in your palm."
-!define MUI_WELCOMEPAGE_TEXT "Install WinPalm, scan its QR code with your phone and control your PC. This installer chooses the native x64 or ARM64 app automatically.$\r$\n$\r$\nWinPalm installs for your Windows account. It includes its runtime and does not need administrator access."
+!define MUI_WELCOMEPAGE_TEXT "Install WinPalm, scan its QR code with your phone and use trackpad, keyboard, Deck and screen mirroring. This installer chooses the native x64 or ARM64 app automatically.$\r$\n$\r$\nWinPalm installs for your Windows account. It includes its runtime and does not need administrator access."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS

@@ -2,7 +2,7 @@
   "id": "/",
   "name": "WinPalm",
   "short_name": "WinPalm",
-  "description": "Use your phone as a Windows trackpad, keyboard, shortcut deck and live screen viewer. No phone app, account or cloud relay.",
+  "description": "Use a phone trackpad, keyboard and shortcut deck alongside Windows screen mirroring. No phone app, account or cloud relay.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

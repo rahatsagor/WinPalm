@@ -25,7 +25,7 @@ For individual Rust checks, `cargo fmt --all --check`, `cargo clippy --locked --
 
 For phone work, copy `web/` into the private development workspace, run `bun install --frozen-lockfile`, then `bun run lint`, `bun run test` and `bun run build`. Set `WINPALM_WEB_OUT` to select its output directory. `WINPALM_HOST` sets Vite's host proxy target. The Rust `dev-host` example accepts `WINPALM_WEB_ROOT` and `WINPALM_PORT`; it logs/discards input unless `--live` is explicitly selected on Windows.
 
-### Screen viewing checks
+### Screen mirroring checks
 
 Phone tests cover display listing, approval requests, viewer leases, stale
 answers, backgrounding, page deactivation, revocation, PNG chunk validation,
@@ -45,7 +45,7 @@ Manual testing on a real Windows PC and phone is still needed for monitor
 capture, encoder compatibility, network behavior, lock and sleep, and power
 use. In particular, test unplug/replug, primary-monitor and resolution changes,
 portrait rotation, repeated Start/Stop, display power-off and wake, and
-frame-rate recovery on a slower connection. No desktop audio is part of screen viewing.
+frame-rate recovery on a slower connection. No desktop audio is part of screen mirroring.
 
 To exercise the browser transport with generated display content, build the
 phone client and run the synthetic host with an Annex-B H.264 fixture. The
@@ -77,13 +77,30 @@ not cancel a replacement viewer, even if the client reused its request ID.
 Open the printed pairing URL in a browser on the same PC. `WINPALM_PORT=0`
 selects an available port. `WINPALM_DISPLAY_IMAGE` is optional and is used
 only for HD text mode. This helper creates a temporary loopback-only host,
-serves a synthetic monitor, and automatically grants screen viewing to
+serves a synthetic monitor, and automatically grants screen mirroring to
 remembered devices paired with that helper. It does not capture the desktop or
 post input. Loopback binding and automatic grants apply only to this synthetic
 host, not to WinPalm. This smoke check does not replace physical PC and phone
 testing.
 
 ## Review and release
+
+Dependency notices are generated from the exact Cargo Windows target trees,
+Bun production packages plus emitted Tailwind/Vite code, and restored NuGet
+runtime/package metadata. After dependency changes, install the phone workspace
+with Bun and restore the .NET project, then run:
+
+```sh
+WINPALM_WEB_PACKAGE=/path/to/phone-workspace/package.json bun scripts/license-notices.ts --output THIRD_PARTY_NOTICES.md --nuget-assets /path/to/project.assets.json
+```
+
+Review the regenerated texts and versioned upstream provenance under
+`packaging/licenses/`. The Windows build verifies the generated result before
+packaging. The app and portable tests verify the copied resource, About opens
+it in Notepad, and both updater and installer require it. Keep the existing
+`THIRD_PARTY_NOTICES.md` package filename for compatibility with older updaters.
+The formatter override tests use `WINPALM_WEB_PACKAGE` to exercise dependencies
+from the disposable installed workspace; installation must precede those tests.
 
 Check x64 and ARM64 builds, native ABI integration, package contents, resource use and actual Windows interaction. Include the tested OS, architecture, keyboard layout, monitor scaling and hardware-dependent results. Avoid claiming phone/hardware behavior from unit tests or a cross-build.
 

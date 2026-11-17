@@ -6,11 +6,17 @@ WinPalm lets paired devices control a Windows desktop. Pair only devices you tru
 
 QR pairing uses a single-use random code in the URL fragment. PIN and explicit-PC-approval pairing are optional, rate limited, and require the PC owner to display or approve the request. Reconnect tokens are random; only their hashes are persisted on the PC. Remove a device to revoke its token, close its sessions and remove its backed-up phone settings.
 
+An unreadable, corrupt or unsupported-version paired-device file stays in
+place. Token reconnects and remembered pairing receive a retryable refusal;
+the phone keeps its token. Restore access or the matching app version, then
+quit and reopen WinPalm. Devices shows the problem and offers an intentional
+Remove all reset. Back up the data directory before resetting it.
+
 The server validates HTTP hosts, same-origin WebSocket upgrades, request sizes, static paths and deck contents. Windows drive paths and alternate data stream syntax are rejected. A session key protects icon requests. Custom hostnames and loopback reverse-proxy forwarding are owner opt-ins. Do not expose the server to the public internet or enable proxy trust for an untrusted local proxy.
 
 ## Windows boundary
 
-The app uses SendInput at the current user's integrity level. It does not install a service, driver or input hook, request UIAccess, or bypass UAC. Input to secure desktops and higher-integrity foreground processes is refused. Closing or losing a session releases its input; an idle-device watchdog also releases keys and buttons. Pause blocks control, cancels screen viewing and dictation, and interrupts queued text and running shell jobs. Completed native operations and apps already launched are not undone.
+The app uses SendInput at the current user's integrity level. It does not install a service, driver or input hook, request UIAccess, or bypass UAC. Input to secure desktops and higher-integrity foreground processes is refused. Closing or losing a session releases its input; an idle-device watchdog also releases keys and buttons. Pause blocks control, cancels screen mirroring and dictation, and interrupts queued text and running shell jobs. Completed native operations and apps already launched are not undone.
 
 PowerShell and named automations are disabled by default. Both require the owner to enable command access on the PC. They inherit that owner's user permissions and can change or delete files. Jobs start suspended, enter a kill-on-close Job Object before execution, and stop on pause, disconnect, revocation, command-disable or a five-minute timeout. Disabling commands does not terminate unrelated apps. Ordinary URL actions allow HTTP, HTTPS and mailto; additional schemes require command permission. JavaScript and data URLs are always refused.
 
@@ -18,17 +24,26 @@ App actions accept catalog identifiers rather than arbitrary phone-supplied exec
 
 App-opening sequences wait for the intended window to become active, with a bounded timeout and checks for pause or disconnect. Windows session lock, remote-session disconnection and sleep are tracked independently; ending one does not resume control while another remains active.
 
-## Screen viewing
+## Screen mirroring
 
-Screen viewing is off by default and needs both the global General setting and a separate device grant made on the PC. Existing and newly paired devices start without screen access. Remembered grants survive token reconnects and reset on re-pairing; a temporary connection's grant lasts only for that session. A connection cannot inherit a remembered device's grant by claiming its device ID. Permission to control the PC does not itself grant permission to see the screen.
+Screen mirroring is off by default and needs both the global General setting and a separate device grant made on the PC. Existing and newly paired devices start without screen access. Remembered grants survive token reconnects and reset on re-pairing; a temporary connection's grant lasts only for that session. A connection cannot inherit a remembered device's grant by claiming its device ID. Permission to control the PC does not itself grant permission to see the screen.
 
 A connected phone may request screen access, including when the global setting is off. Requests expire after one minute and are limited per session, device/address, and globally. Only the native PC approval action grants access and enables global viewing. Approval does not start capture. Pause, lock, sleep, revocation, re-pairing, disconnect and client cancellation invalidate pending requests, and the desktop UI checks the authoritative pending list before showing a prompt.
 
 The owner grants access to the contents of a selected monitor, including visible applications and notifications. Native DXGI capture stays on the interactive desktop and never switches to a secure desktop or bypasses protected video. Windows session/power events and an input-desktop check stop viewing when the desktop becomes unavailable. A removed monitor ends the view; a surviving monitor's mode or rotation change rebuilds capture. Pointer relocation also needs ordinary Windows input permission.
 
+A live capture owns Windows display-required and system-required power
+requests. These keep idle display-off and sleep from interrupting the view
+and can delay automatic screen-saver locking. Explicit lock, sleep and display
+power-off still stop the view. Every capture owns its own request handle, so
+stopping or rebuilding an old capture cannot release a replacement's requests.
+The initial session state is queried before serving phones and reconciled
+after session events and during polling. An unreadable state pauses control
+until a successful query or appropriate session transition permits it.
+
 Only one viewer is active at a time. A host-generated generation binds every capture and frame to its authorized connection. Pause, lock, sleep, display power-off, revocation, global disable, disconnect, an expired visible-phone lease, or capture failure cancels it. Queued native starts and late encoded frames cannot revive a cancelled view. Capture, readback, encoding and media queues are bounded. No desktop audio is captured, and no screen pictures or video are recorded to disk or logged.
 
-H.264 video and lossless PNG pictures travel directly over WebRTC with encrypted media/data channels, separate from the control WebSocket. There are no external STUN/TURN servers or cloud relays. Direct UDP connectivity is required; a TCP reverse proxy alone does not carry the stream. Screen viewing works through HTTP or HTTPS, but HTTP still exposes authentication and signaling to on-path observation or modification. Use trusted HTTPS on networks where that matters.
+H.264 video and lossless PNG pictures travel directly over WebRTC with encrypted media/data channels, separate from the control WebSocket. There are no external STUN/TURN servers or cloud relays. Direct UDP connectivity is required; a TCP reverse proxy alone does not carry the stream. Screen mirroring works through HTTP or HTTPS, but HTTP still exposes authentication and signaling to on-path observation or modification. Use trusted HTTPS on networks where that matters.
 
 The browser clears playback and closes its peer when Display is left, the phone is backgrounded, or the connection ends. It must explicitly start viewing again. HD pictures have bounded sizes, dimensions, chunk ordering and transfer time; malformed or unexpected data is rejected before decoding.
 
@@ -45,6 +60,13 @@ Dictation messages carry the recording's request ID through the phone, core and 
 WinPalm has no analytics or accounts. Automatic GitHub release checks send the app user agent and ordinary network metadata to GitHub; they send no input, paired-device or settings data. Update downloads start only when the owner chooses Download and restart. Normal app/website actions intentionally open their configured destinations using Windows. Diagnostic logs are bounded and contain error classes/codes; they exclude input, speech, clipboard content and pairing secrets. Protect test reports as ordinary local diagnostic files, since exception details can include paths.
 
 The local certificate authority is constrained to local/VPN address space and explicit names allowed by the core. Export only its public certificate. Verify the fingerprint before trusting it on a phone and remove that trust when no longer needed. Never share the private key.
+
+Saved authority keys must match their certificates, and the server leaf must
+verify against the authority and current server names. Recovery first
+reissues the leaf. An inconsistent authority or its metadata may require
+replacing both authority and leaf. Devices must trust the new public
+certificate after verifying its fingerprint; remove the obsolete authority.
+An intact authority is preserved during normal leaf renewal.
 
 ## Updates
 

@@ -4,7 +4,19 @@
 
 ### Windows app
 
-- Add optional screen viewing with DXGI Desktop Duplication capture and Media
+- Preserve unreadable, corrupt and newer paired-device files and phone tokens.
+  Refuse remembered pairing until recovery, and expose an intentional reset in
+  Devices. Validate saved HTTPS key/certificate pairs and the full server chain,
+  including recovery from interrupted authority replacement.
+- Keep the PC and display awake during an allowed live mirror. Read the initial
+  Windows session lock state, reconcile session transitions and release each
+  capture's power requests on stop or rebuild. Explicit lock and sleep still stop it.
+- Restore an initially empty clipboard when quitting during a temporary paste,
+  preserve subsequent user copies and make repeated cleanup safe.
+- Bundle current app, Rust, phone, NuGet/.NET and installer license notices.
+  Open them from About and verify their resource and package requirements.
+- Reject empty or duplicate Deck IDs in native imports and phone saves.
+- Add optional screen mirroring with DXGI Desktop Duplication capture and Media
   Foundation H.264 encoding. WinPalm prefers a compatible hardware encoder and
   falls back to the Windows software encoder when needed. Enable viewing in
   General, then grant each device access in Devices or approve its native
@@ -24,19 +36,28 @@
 
 ### Phone client
 
+- Keep the monitor list and authorized live video/HD view through repeated
+  refreshes. Retain the newest waiting HD picture under backpressure and tolerate
+  transient UDP send errors while still timing out sustained failure.
+- Count overlapping mouse and media holds, including across devices, and ignore
+  old cleanup callbacks after release, pause or reconnection.
+- Prevent shortened custom-key IDs from colliding and reject inherited object
+  names as media controls. Keep screen mirroring terminology consistent.
+- Fix the two moderate formatter-tooling dependency advisories with scoped
+  overrides, verified through actual formatter and EditorConfig operations.
 - Add a Display tab to view one PC monitor, above a trackpad or keyboard, or
   beside controls on a wide screen. Choose a monitor, zoom the preview, move
   the PC pointer to that monitor, and select motion, battery or text quality.
 - HD text sends lossless PNG pictures up to a 3840 × 2160 pixel budget, at up
   to one update per second. Display preferences can be copied and backed up.
-- Fullscreen viewing hides input controls. Preview gestures stay on the phone,
+- Fullscreen mirroring hides input controls. Preview gestures stay on the phone,
   and control mode and preview space can be adjusted from Display options.
 - Keep viewing active when Windows refreshes unrelated capabilities, including
   foreground-app input permission. Opening Start or switching apps no longer
   causes the phone to stop and refresh an unchanged display capability.
 - Preserve newly started views through repeated access grants and delayed
   approval refreshes, and allow a failed display-list send to be retried.
-- Keep hidden controls out of keyboard navigation during fullscreen viewing,
+- Keep hidden controls out of keyboard navigation during fullscreen mirroring,
   including responsive layout changes, and restore focus on exit.
 - Use matching up/down chevrons at every scroll-strip width and increase the
   short handle to 112px.
