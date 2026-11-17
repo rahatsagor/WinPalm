@@ -374,6 +374,12 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let config = shared.config();
+    // An unreadable list is not evidence that a token was revoked. The phone
+    // erases its token on Unknown, and a new remembered pairing would overwrite
+    // the saved list. Leave both copies alone until the PC can load it again.
+    if (remember || matches!(&request, AuthRequest::Token { .. })) && !shared.state().trust.intact() {
+        return Err(Some(Refusal(DenyReason::Busy, Some(Duration::from_secs(5)))));
+    }
     let now = Instant::now();
     let fallback_name = || {
         let name = auth::clean(&device.name, 64);
@@ -667,7 +673,7 @@ impl Connection {
                 None
             }
             ClientMessage::DisplayStop { id } => {
-                self.shared.displays.cancel(&self.shared, Some(self.id), Some(id), "Screen viewing stopped.");
+                self.shared.displays.cancel(&self.shared, Some(self.id), Some(id), "Screen mirroring stopped.");
                 None
             }
             ClientMessage::DisplayAlive { id } => {

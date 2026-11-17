@@ -261,6 +261,20 @@ describe('while reconnecting', () => {
 })
 
 describe('denied', () => {
+  it('keeps a token when the PC cannot load its paired devices', () => {
+    conn.connect()
+    last().open()
+    last().receive({ t: 'denied', reason: 'busy', retryAfter: 5 })
+    last().drop()
+    expect(conn.state.status).toBe('denied')
+    expect(localStorage.getItem('winpalm.token')).toBe('saved')
+    conn.retryNow()
+    last().open()
+    expect(last().sent).toMatchObject([{ t: 'hello', auth: { method: 'token', token: 'saved' } }])
+    last().receive(welcome)
+    expect(conn.state.status).toBe('connected')
+  })
+
   it('forgets the token only when the PC no longer knows it', () => {
     conn.connect()
     last().open()

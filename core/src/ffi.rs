@@ -143,7 +143,7 @@ fn dispatch(request: Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "status" => Ok(
-            json!({"running":host.is_running(),"paused":host.is_paused(),"pairing":host.pairing_info(),"connected":host.connected_devices(),"trusted":host.trusted_devices()}),
+            json!({"running":host.is_running(),"paused":host.is_paused(),"pairing":host.pairing_info(),"connected":host.connected_devices(),"trusted":host.trusted_devices(),"trustStoreIntact":host.trust_store_intact()}),
         ),
         "config" => {
             host.update_config(serde_json::from_value(request["config"].clone()).map_err(|_| "Invalid configuration")?);

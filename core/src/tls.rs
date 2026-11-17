@@ -126,6 +126,41 @@ fn fingerprint(der: &[u8]) -> String {
     Sha256::digest(der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
 }
 
+fn ca_matches_key(der: &[u8], key: &KeyPair) -> bool {
+    let key = pki_types::PrivateKeyDer::Pkcs8(pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()));
+    rustls::sign::CertifiedKey::from_der(
+        vec![pki_types::CertificateDer::from(der.to_vec())],
+        key,
+        &rustls::crypto::ring::default_provider(),
+    )
+    .and_then(|certified| certified.keys_match())
+    .is_ok()
+}
+
+fn verify_chain(ca: &[u8], leaf: &[u8], names: &[String]) -> Result<(), rustls::Error> {
+    use rustls::client::danger::ServerCertVerifier;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(pki_types::CertificateDer::from(ca.to_vec()))?;
+    let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+        Arc::new(roots),
+        Arc::new(rustls::crypto::ring::default_provider()),
+    )
+    .build()
+    .map_err(|error| rustls::Error::General(error.to_string()))?;
+    for name in names {
+        let name = pki_types::ServerName::try_from(name.clone())
+            .map_err(|_| rustls::Error::General("Invalid local TLS name".into()))?;
+        verifier.verify_server_cert(
+            &pki_types::CertificateDer::from(leaf),
+            &[],
+            &name,
+            &[],
+            pki_types::UnixTime::now(),
+        )?;
+    }
+    Ok(())
+}
+
 /// Names the server certificate must cover: the Bonjour name, localhost and
 /// every current LAN address the authority is allowed to vouch for.
 pub fn server_names(host_name: &str, addresses: &[IpAddr]) -> Vec<String> {
@@ -143,19 +178,25 @@ pub fn server_names(host_name: &str, addresses: &[IpAddr]) -> Vec<String> {
 
 /// Load or create the CA and a server certificate covering `names`.
 pub fn load_identity(dir: &Path, names: &[String]) -> Result<Identity, TlsError> {
-    match build_identity(dir, names, false) {
+    match build_identity(dir, names, false, false) {
         // The saved key and certificate don't belong together, say after a
         // crash between writing them. Issue a new certificate rather than
         // failing the same way on every launch.
         Err(TlsError::Rustls(err)) => {
             tracing::warn!(%err, "reissuing the server certificate");
-            build_identity(dir, names, true)
+            match build_identity(dir, names, true, false) {
+                // A complete new CA pair can precede its metadata in a crash.
+                // If reissuing a leaf still cannot authenticate the chain,
+                // rebuild the inconsistent authority and its leaf together.
+                Err(TlsError::Rustls(_)) => build_identity(dir, names, true, true),
+                result => result,
+            }
         }
         result => result,
     }
 }
 
-fn build_identity(dir: &Path, names: &[String], reissue: bool) -> Result<Identity, TlsError> {
+fn build_identity(dir: &Path, names: &[String], reissue: bool, replace_authority: bool) -> Result<Identity, TlsError> {
     let paths = Paths::new(dir);
     let now = OffsetDateTime::now_utc();
     let renew_cutoff = (now + Duration::days(RENEW_BEFORE_DAYS)).unix_timestamp();
@@ -167,8 +208,15 @@ fn build_identity(dir: &Path, names: &[String], reissue: bool) -> Result<Identit
     let ca_der = std::fs::read(&paths.ca_cert).ok();
 
     let (ca_key, ca_der, mut current) = match (ca_key, ca_der, meta.take()) {
-        (Some(key), Some(der), Some(meta)) if meta.ca_expires > renew_cutoff => (key, der, meta),
+        (Some(key), Some(der), Some(meta))
+            if !replace_authority && meta.ca_expires > renew_cutoff && ca_matches_key(&der, &key) =>
+        {
+            (key, der, meta)
+        }
         _ => {
+            if paths.ca_cert.exists() {
+                tracing::warn!("replacing the local HTTPS authority; devices must trust its new certificate");
+            }
             changed = true;
             let key = KeyPair::generate()?;
             let suffix = &crate::auth::random_token(4)[..4];
@@ -221,6 +269,7 @@ fn build_identity(dir: &Path, names: &[String], reissue: bool) -> Result<Identit
         store::save(&paths.meta, &current)?;
     }
 
+    verify_chain(&ca_der, &leaf_der, names)?;
     let chain = vec![pki_types::CertificateDer::from(leaf_der), pki_types::CertificateDer::from(ca_der.clone())];
     let key = pki_types::PrivateKeyDer::Pkcs8(pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -267,6 +316,75 @@ mod tests {
         let again = load_identity(dir.path(), &names).unwrap();
         assert_eq!(first.ca_fingerprint, again.ca_fingerprint, "devices keep trusting the same CA");
         load_identity(dir.path(), &names).expect("the reissued pair loads as is");
+    }
+
+    #[test]
+    fn recovers_from_an_authority_key_that_doesnt_match_its_certificate() {
+        use rustls::client::danger::ServerCertVerifier;
+
+        let dir = tempfile::tempdir().unwrap();
+        let names = server_names("Studio.local", &[]);
+        let first = load_identity(dir.path(), &names).unwrap();
+        let leaf_before = std::fs::read(dir.path().join("server.der")).unwrap();
+        // A crash between the CA key and certificate writes must not leave
+        // the PC signing leaves with a key the phone's root cannot verify.
+        std::fs::write(dir.path().join("ca-key.pem"), KeyPair::generate().unwrap().serialize_pem()).unwrap();
+        let recovered = load_identity(dir.path(), &names).unwrap();
+        assert_ne!(first.ca_fingerprint, recovered.ca_fingerprint);
+        let leaf = std::fs::read(dir.path().join("server.der")).unwrap();
+        assert_ne!(leaf_before, leaf, "the old leaf belongs to the previous authority");
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(pki_types::CertificateDer::from(recovered.ca_der.clone())).unwrap();
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .unwrap();
+        verifier
+            .verify_server_cert(
+                &pki_types::CertificateDer::from(leaf),
+                &[],
+                &pki_types::ServerName::try_from("localhost").unwrap(),
+                &[],
+                pki_types::UnixTime::now(),
+            )
+            .expect("the recovered chain must authenticate with its advertised authority");
+        assert_eq!(load_identity(dir.path(), &names).unwrap().ca_fingerprint, recovered.ca_fingerprint);
+    }
+
+    #[test]
+    fn recovers_when_a_complete_new_authority_was_saved_before_its_metadata() {
+        use rustls::client::danger::ServerCertVerifier;
+        let dir = tempfile::tempdir().unwrap();
+        let replacement = tempfile::tempdir().unwrap();
+        let names = server_names("Studio.local", &[]);
+        load_identity(dir.path(), &names).unwrap();
+        load_identity(replacement.path(), &names).unwrap();
+        // A retry after an authority-key mismatch can crash after writing the
+        // new CA pair but before saving the leaf or its metadata.
+        for file in ["ca-key.pem", "ca.der"] {
+            std::fs::copy(replacement.path().join(file), dir.path().join(file)).unwrap();
+        }
+        let recovered = load_identity(dir.path(), &names).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(pki_types::CertificateDer::from(recovered.ca_der.clone())).unwrap();
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .unwrap();
+        verifier
+            .verify_server_cert(
+                &pki_types::CertificateDer::from(std::fs::read(dir.path().join("server.der")).unwrap()),
+                &[],
+                &pki_types::ServerName::try_from("localhost").unwrap(),
+                &[],
+                pki_types::UnixTime::now(),
+            )
+            .expect("a recovered leaf must chain to the authority advertised to the phone");
+        assert_eq!(load_identity(dir.path(), &names).unwrap().ca_fingerprint, recovered.ca_fingerprint);
     }
 
     #[test]

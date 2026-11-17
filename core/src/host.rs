@@ -749,9 +749,9 @@ impl CoreHost {
                 None,
                 None,
                 "cancelled",
-                "Screen viewing was turned off on the PC.",
+                "Screen mirroring was turned off on the PC.",
             );
-            self.shared.displays.cancel(&self.shared, None, None, "Screen viewing was turned off on the PC.");
+            self.shared.displays.cancel(&self.shared, None, None, "Screen mirroring was turned off on the PC.");
         }
         if previous.allow_shell != config.allow_shell
             || previous.voice_available != config.voice_available
@@ -854,6 +854,10 @@ impl CoreHost {
             .collect()
     }
 
+    pub fn trust_store_intact(&self) -> bool {
+        self.shared.state().trust.intact()
+    }
+
     pub fn forget_device(&self, id: String) {
         let removed = self.shared.state().trust.remove(&id);
         self.shared.save_trust();
@@ -926,9 +930,9 @@ impl CoreHost {
                 None,
                 None,
                 "cancelled",
-                "Screen viewing is paused on the PC.",
+                "Screen mirroring is paused on the PC.",
             );
-            self.shared.displays.cancel(&self.shared, None, None, "Screen viewing is paused on the PC.");
+            self.shared.displays.cancel(&self.shared, None, None, "Screen mirroring is paused on the PC.");
             self.shared.cancel_voices();
         }
     }
@@ -1028,7 +1032,7 @@ impl CoreHost {
                     Some(session),
                     None,
                     "allowed",
-                    "Screen viewing was allowed on the PC.",
+                    "Screen mirroring was allowed on the PC.",
                 );
             }
             self.shared.send_to(session, ServerMessage::DisplayAccess { allowed });
@@ -1063,7 +1067,7 @@ impl CoreHost {
                 Some(session),
                 None,
                 "allowed",
-                "Screen viewing was allowed on the PC.",
+                "Screen mirroring was allowed on the PC.",
             );
         }
         self.shared.emit(HostEvent::SessionsChanged);
@@ -1113,12 +1117,18 @@ impl CoreHost {
     /// Lock, sleep, or native permission revocation ends viewing without
     /// preventing the existing input controls from reconnecting afterward.
     pub fn suspend_display(&self) {
-        self.shared.displays.cancel_access(&self.shared, None, None, "cancelled", "Screen viewing stopped on the PC.");
+        self.shared.displays.cancel_access(
+            &self.shared,
+            None,
+            None,
+            "cancelled",
+            "Screen mirroring stopped on the PC.",
+        );
         self.shared.displays.cancel(
             &self.shared,
             None,
             None,
-            "Screen viewing stopped on the PC. Unlock or wake the PC, then start viewing again.",
+            "Screen mirroring stopped on the PC. Unlock or wake the PC, then start viewing again.",
         );
     }
 

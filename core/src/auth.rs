@@ -145,8 +145,9 @@ pub(crate) fn clean(text: &str, max: usize) -> String {
 
 impl TrustStore {
     pub fn load(path: Option<PathBuf>) -> Self {
-        let (devices, intact) = match path.as_deref().map(store::try_load::<TrustFile>) {
-            Some(Loaded::Found(file)) => (file.devices, true),
+        let (devices, intact) = match path.as_deref().map(store::try_load_preserving::<TrustFile>) {
+            Some(Loaded::Found(file)) if file.version == 1 => (file.devices, true),
+            Some(Loaded::Found(_)) => (Vec::new(), false),
             Some(Loaded::Unusable) => (Vec::new(), false),
             Some(Loaded::Missing) | None => (Vec::new(), true),
         };
@@ -165,7 +166,7 @@ impl TrustStore {
 
     /// The changes made since the last call, to write with [`TrustSave::write`].
     pub fn pending_save(&mut self) -> Option<TrustSave> {
-        if self.taken == self.revision {
+        if !self.intact || self.taken == self.revision {
             return None;
         }
         self.taken = self.revision;
@@ -285,10 +286,12 @@ impl TrustStore {
 
     pub fn clear(&mut self) {
         self.devices.clear();
+        // Explicitly forgetting every device also resets an unusable list.
+        self.intact = true;
         self.save();
     }
 
-    /// The stored name, including the mark of a name set on the Mac.
+    /// The stored name, including the mark of a name set on the PC.
     pub fn name(&self, id: &str) -> Option<String> {
         self.devices.iter().find(|d| d.device.id == id).map(|d| d.device.name.clone())
     }
@@ -592,8 +595,8 @@ mod tests {
     fn a_failed_write_is_offered_again() {
         let dir = tempfile::tempdir().unwrap();
         // A file where the folder should be, so nothing can be written there.
-        std::fs::write(dir.path().join("blocked"), b"").unwrap();
         let mut trust = TrustStore::load(Some(dir.path().join("blocked/devices.json")));
+        std::fs::write(dir.path().join("blocked"), b"").unwrap();
         trust.issue(&device("a"), PHONE);
         let save = trust.pending_save().unwrap();
         let revision = save.revision();
@@ -610,7 +613,33 @@ mod tests {
         let path = dir.path().join("devices.json");
         assert!(TrustStore::load(Some(path.clone())).intact());
         std::fs::write(&path, b"{not json").unwrap();
-        assert!(!TrustStore::load(Some(path)).intact());
+        for _ in 0..2 {
+            let mut trust = TrustStore::load(Some(path.clone()));
+            assert!(!trust.intact());
+            trust.issue(&device("a"), PHONE);
+            assert!(trust.pending_save().is_none(), "no path may overwrite an unusable list");
+            assert_eq!(std::fs::read(&path).unwrap(), b"{not json");
+        }
+        let mut trust = TrustStore::load(Some(path.clone()));
+        trust.clear();
+        assert!(trust.pending_save().unwrap().write(&Mutex::new(0)));
+        assert!(TrustStore::load(Some(path)).intact());
+    }
+
+    #[test]
+    fn preserves_device_files_from_an_unsupported_version_until_explicit_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let file = br#"{"version":2,"devices":[]}"#;
+        std::fs::write(&path, file).unwrap();
+        let mut trust = TrustStore::load(Some(path.clone()));
+        assert!(!trust.intact());
+        assert!(trust.pending_save().is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), file);
+        trust.clear();
+        assert!(trust.intact(), "explicitly forgetting all devices resets the list");
+        trust.pending_save().unwrap().write(&Mutex::new(0));
+        assert!(TrustStore::load(Some(path)).intact());
     }
 
     #[test]
