@@ -51,7 +51,7 @@ export function requestScreenAccess() {
   const id = ++request
   accessId = id
   screen.accessState = 'pending'
-  screen.accessMessage = 'Approve screen viewing on the PC. This request expires in one minute.'
+  screen.accessMessage = 'Approve screen mirroring on the PC. This request expires in one minute.'
   if (!send({ t: 'displayAccessRequest', id })) { cancelAccessRequest(); screen.accessState = 'error'; return }
   accessTimeout = setTimeout(() => {
     if (accessId !== id) return
@@ -116,7 +116,10 @@ function fail(message: string) {
 
 export function refreshDisplays() {
   if (listId !== null) return
-  stopViewing()
+  // Refreshing the list keeps a healthy view. Windows ends the view itself
+  // when the display being watched goes away.
+  const viewing = streamId !== null && canView() && connection.features.display === true
+  if (!viewing) stopViewing()
   screen.canRequest = false
   clearTimeout(listTimeout)
   listId = null
@@ -126,10 +129,10 @@ export function refreshDisplays() {
     return
   }
   if (connection.features.display === undefined) {
-    fail('Update WinPalm on the PC to use screen viewing.')
+    fail('Update WinPalm on the PC to use screen mirroring.')
     return
   }
-  screen.status = 'loading'
+  if (!viewing) screen.status = 'loading'
   const id = ++request
   listId = id
   if (!send({ t: 'displays', id })) {
@@ -140,7 +143,7 @@ export function refreshDisplays() {
   listTimeout = setTimeout(() => {
     if (listId !== id) return
     listId = null
-    fail('The PC did not answer. Check its connection, then refresh the display list.')
+    if (streamId === null) fail('The PC did not answer. Check its connection, then refresh the display list.')
   }, 8_000)
 }
 
@@ -295,17 +298,22 @@ onMessage(message => {
     if (!visible() || message.id !== listId) return
     clearTimeout(listTimeout)
     listId = null
+    // A refresh only updates the choices during a view. A failed query must
+    // not hide the current display or change the live connection state.
+    const viewing = streamId !== null
+    if (viewing && !message.displays.length) return
     screen.displays = message.displays
     // A capability refresh can finish before the approval fallback timer.
     // Keep that timer from interrupting a newly started, authorized viewer.
     if (message.displays.length) clearTimeout(approvalRefresh)
     screen.canRequest = message.canRequest === true && connection.features.displayRequests === true
+    if (viewing) return
     screen.message = message.message ?? ''
     if (!settings.displayId && message.displays.length) settings.displayId = (message.displays.find(display => display.main) ?? message.displays[0]!).id
     if (settings.displayId && message.displays.length && !selectedDisplay()) screen.message = 'The selected display is unavailable. Choose another display above.'
     screen.status = message.displays.length ? 'ready' : 'error'
   } else if (message.t === 'displayAccess') {
-    if (!message.allowed) stopViewing('Screen viewing permission was removed on the PC.')
+    if (!message.allowed) stopViewing('Screen mirroring permission was removed on the PC.')
     if (canView() && accessId === null && streamId === null) refreshDisplays()
   } else if (message.t === 'displayRequest' && message.id === accessId) {
     screen.accessState = message.state
@@ -326,7 +334,7 @@ onMessage(message => {
         if (current === generation) fail('The browser could not accept the video connection. Try again.')
       })
     } else if (message.state === 'error' || message.state === 'stopped') {
-      stopViewing(message.message ?? 'Screen viewing stopped.', false)
+      stopViewing(message.message ?? 'Screen mirroring stopped.', false)
     }
   }
 })
@@ -339,7 +347,7 @@ watch([() => connection.status, () => connection.paused, () => connection.featur
     cancelAccessRequest()
     listId = null
     clearTimeout(listTimeout)
-    stopViewing(paused ? 'Screen viewing is paused on the PC.' : 'Reconnect to the PC, then start viewing again.')
+    stopViewing(paused ? 'Screen mirroring is paused on the PC.' : 'Reconnect to the PC, then start viewing again.')
     screen.displays = []
     screen.canRequest = false
   } else if (visible() && accessId === null) refreshDisplays()

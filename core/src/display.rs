@@ -15,7 +15,7 @@ use str0m::media::{Direction, MediaKind, MediaTime};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use crate::api::{DisplayApprovalRequest, DisplayCommand, HostEvent};
 use crate::host::{Outgoing, Shared};
@@ -26,6 +26,22 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_FRAME: usize = 1024 * 1024;
 const MAX_IMAGE: usize = 16 * 1024 * 1024;
 const ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
+const SEND_FAILURE_LIMIT: Duration = Duration::from_secs(5);
+const LIST_REPEAT: Duration = Duration::from_millis(300);
+const LIST_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[derive(Default)]
+struct SendFailures(Option<Instant>);
+impl SendFailures {
+    fn record(&mut self, now: Instant, sent: bool) -> bool {
+        if sent {
+            self.0 = None;
+            false
+        } else {
+            now.duration_since(*self.0.get_or_insert(now)) > SEND_FAILURE_LIMIT
+        }
+    }
+}
 
 struct AccessRequest {
     native: DisplayApprovalRequest,
@@ -48,6 +64,25 @@ struct Frame {
     keyframe: bool,
 }
 
+/// HD text keeps only the newest waiting picture. A still screen sends no
+/// further updates, so dropping the newest would leave the phone out of date.
+#[derive(Default)]
+struct Latest {
+    frame: Mutex<Option<Frame>>,
+    ready: Notify,
+}
+
+impl Latest {
+    fn replace(&self, frame: Frame) {
+        *self.frame.lock().unwrap_or_else(|p| p.into_inner()) = Some(frame);
+        self.ready.notify_one();
+    }
+
+    fn take(&self) -> Option<Frame> {
+        self.frame.lock().unwrap_or_else(|p| p.into_inner()).take()
+    }
+}
+
 struct Active {
     session: u64,
     request: u32,
@@ -55,14 +90,20 @@ struct Active {
     original: bool,
     alive: Instant,
     frames: mpsc::Sender<Frame>,
+    latest: Arc<Latest>,
     cancel: watch::Sender<bool>,
     stopped: Arc<AtomicBool>,
     needs_keyframe: Arc<AtomicBool>,
 }
 
 struct Sources {
+    /// The phone's newest request, which receives the answer.
     request: u32,
+    /// The request the PC app is answering.
+    native: u32,
     ids: HashSet<String>,
+    displays: Vec<DisplayInfo>,
+    message: Option<String>,
     requested: Instant,
     pending: bool,
 }
@@ -99,11 +140,11 @@ pub(crate) fn access(shared: &Shared, session: u64) -> Result<(), &'static str> 
         return Err("Unlock or wake the PC, then try again.");
     }
     if !shared.config().display_enabled {
-        return Err("Screen viewing is off. On the PC, open WinPalm Settings → General → Display.");
+        return Err("Screen mirroring is off. On the PC, open WinPalm Settings → General → Display.");
     }
     let state = shared.state();
     if state.paused {
-        return Err("Screen viewing is paused on the PC.");
+        return Err("Screen mirroring is paused on the PC.");
     }
     match state.sessions.get(&session) {
         Some(live)
@@ -112,7 +153,7 @@ pub(crate) fn access(shared: &Shared, session: u64) -> Result<(), &'static str> 
         {
             Ok(())
         }
-        Some(_) => Err("Allow screen viewing for this device in WinPalm Settings → Devices on the PC."),
+        Some(_) => Err("Allow screen mirroring for this device in WinPalm Settings → Devices on the PC."),
         None => Err("The device is no longer connected."),
     }
 }
@@ -127,7 +168,7 @@ impl DisplayHub {
         let state = shared.state();
         if state.paused {
             drop(state);
-            refuse("Screen viewing is paused on the PC.");
+            refuse("Screen mirroring is paused on the PC.");
             return;
         }
         let Some(live) = state.sessions.get(&session) else { return };
@@ -176,7 +217,7 @@ impl DisplayHub {
         let _ = live.tx.send(Outgoing::Message(access_state(
             client,
             "pending",
-            "Approve screen viewing on the PC. This request expires in one minute.",
+            "Approve screen mirroring on the PC. This request expires in one minute.",
         )));
         drop(requests);
         drop(state);
@@ -285,9 +326,9 @@ impl DisplayHub {
         let (status, message) = if !valid {
             ("expired", "This access request is no longer valid. Ask again from the phone.")
         } else if allow {
-            ("allowed", "Screen viewing was approved on the PC. Refresh the display list when ready.")
+            ("allowed", "Screen mirroring was approved on the PC. Refresh the display list when ready.")
         } else {
-            ("denied", "Screen viewing was declined on the PC.")
+            ("denied", "Screen mirroring was declined on the PC.")
         };
         shared.send_to(session, access_state(request.client, status, message));
         if valid && allow {
@@ -300,7 +341,7 @@ impl DisplayHub {
     pub(crate) fn set_awake(&self, shared: &Shared, awake: bool) {
         self.awake.store(awake, Ordering::Release);
         if !awake {
-            self.cancel(shared, None, None, "Screen viewing stopped. Unlock or wake the PC to continue.");
+            self.cancel(shared, None, None, "Screen mirroring stopped. Unlock or wake the PC to continue.");
             self.cancel_access(shared, None, None, "cancelled", "Unlock or wake the PC, then ask again.");
         }
     }
@@ -315,23 +356,37 @@ impl DisplayHub {
             return;
         }
         let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
-        if sources.get(&session).is_some_and(|s| {
-            s.requested.elapsed() < Duration::from_millis(300)
-                || s.pending && s.requested.elapsed() < Duration::from_secs(8)
-        }) {
-            drop(sources);
-            shared.send_to(
-                session,
-                ServerMessage::Displays {
+        // Repeated requests never start overlapping native queries, and never
+        // answer with an empty list that would hide the displays on the phone.
+        if let Some(source) = sources.get_mut(&session) {
+            if source.pending && source.requested.elapsed() < LIST_TIMEOUT {
+                source.request = request;
+                return;
+            }
+            if !source.pending && source.requested.elapsed() < LIST_REPEAT {
+                let reply = ServerMessage::Displays {
                     id: request,
-                    displays: vec![],
+                    displays: source.displays.clone(),
                     can_request: false,
-                    message: Some("The PC is still refreshing its displays. Try again in a moment.".into()),
-                },
-            );
-            return;
+                    message: source.message.clone(),
+                };
+                drop(sources);
+                shared.send_to(session, reply);
+                return;
+            }
         }
-        sources.insert(session, Sources { request, ids: HashSet::new(), requested: Instant::now(), pending: true });
+        sources.insert(
+            session,
+            Sources {
+                request,
+                native: request,
+                ids: HashSet::new(),
+                displays: vec![],
+                message: None,
+                requested: Instant::now(),
+                pending: true,
+            },
+        );
         drop(sources);
         shared.delegate.display_command(session, DisplayCommand::List { request_id: request });
     }
@@ -349,7 +404,7 @@ impl DisplayHub {
         }
         let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
         let Some(source) = sources.get_mut(&session) else { return };
-        if source.request != request {
+        if source.native != request || !source.pending {
             return;
         }
         let displays: Vec<_> = displays
@@ -358,9 +413,12 @@ impl DisplayHub {
             .take(32)
             .collect();
         source.ids = displays.iter().map(|d| d.id.clone()).collect();
+        source.displays = displays.clone();
+        source.message = message.clone();
         source.pending = false;
+        let id = source.request;
         drop(sources);
-        shared.send_to(session, ServerMessage::Displays { id: request, displays, can_request: false, message });
+        shared.send_to(session, ServerMessage::Displays { id, displays, can_request: false, message });
     }
 
     pub(crate) fn alive(&self, session: u64, request: u32) {
@@ -430,7 +488,7 @@ impl DisplayHub {
 
     pub(crate) fn forget(&self, shared: &Shared, session: u64) {
         self.cancel_access(shared, Some(session), None, "cancelled", "This device's access request was cancelled.");
-        self.cancel(shared, Some(session), None, "Screen viewing stopped.");
+        self.cancel(shared, Some(session), None, "Screen mirroring stopped.");
         self.sources.lock().unwrap_or_else(|p| p.into_inner()).remove(&session);
     }
 
@@ -452,7 +510,11 @@ impl DisplayHub {
         else {
             return false;
         };
-        if !active.original && data.len() > MAX_FRAME {
+        if active.original {
+            active.latest.replace(Frame { data, timestamp_us, queued: Instant::now(), keyframe });
+            return true;
+        }
+        if data.len() > MAX_FRAME {
             return false;
         }
         if active.needs_keyframe.load(Ordering::Acquire) && !keyframe {
@@ -521,7 +583,8 @@ pub(crate) fn start(
     }
     let generation = shared.next_id();
     let original = quality == DisplayQuality::Original;
-    let (tx, rx) = mpsc::channel(if original { 1 } else { 2 });
+    let (tx, rx) = mpsc::channel(2);
+    let latest = Arc::new(Latest::default());
     let (cancel, cancelled) = watch::channel(false);
     let stopped = Arc::new(AtomicBool::new(false));
     let needs_keyframe = Arc::new(AtomicBool::new(true));
@@ -532,6 +595,7 @@ pub(crate) fn start(
         original,
         alive: Instant::now(),
         frames: tx,
+        latest: latest.clone(),
         cancel,
         stopped: stopped.clone(),
         needs_keyframe: needs_keyframe.clone(),
@@ -548,12 +612,13 @@ pub(crate) fn start(
             sdp,
             quality,
             rx,
+            &latest,
             cancelled,
             &stopped,
             &needs_keyframe,
         )
         .await;
-        let message = result.err().unwrap_or_else(|| "Screen viewing stopped.".into());
+        let message = result.err().unwrap_or_else(|| "Screen mirroring stopped.".into());
         shared.displays.failed(&shared, session, generation, &message);
     });
 }
@@ -633,6 +698,7 @@ async fn run(
     offer_text: String,
     quality: DisplayQuality,
     mut frames: mpsc::Receiver<Frame>,
+    latest: &Latest,
     mut cancelled: watch::Receiver<bool>,
     stopped: &AtomicBool,
     needs_keyframe: &AtomicBool,
@@ -707,6 +773,7 @@ async fn run(
     let mut last_config = Instant::now();
     let mut last_keyframe = Instant::now() - Duration::from_secs(1);
     let mut waiting_for_keyframe = true;
+    let mut send_failures = SendFailures::default();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     loop {
         if stopped.load(Ordering::Acquire) {
@@ -726,13 +793,21 @@ async fn run(
         if !connected && started.elapsed() > CONNECT_TIMEOUT {
             return Err("Video could not reach the phone. Check that the network or VPN allows a direct UDP connection to the PC.".into());
         }
+        if original
+            && connected
+            && image_transfer.is_none()
+            && let Some(frame) = latest.take()
+        {
+            image_sequence = image_sequence.wrapping_add(1);
+            image_transfer = Some((frame, image_sequence, 0, Instant::now()));
+        }
         if let (Some(channel), Some((frame, sequence, offset, began))) = (image_channel, image_transfer.as_mut()) {
             if began.elapsed() > Duration::from_secs(12) {
                 return Err("HD text could not keep up with the connection. Choose Sharper text and try again.".into());
             }
             if let Some(mut channel) = rtc.channel(channel) {
-                // One in-flight picture, one queued picture, and 128 KiB of SCTP buffering. Chunk
-                // writes yield regularly to network input and cancellation.
+                // One in-flight picture, the newest waiting picture, and 128 KiB of SCTP
+                // buffering. Chunk writes yield regularly to network input and cancellation.
                 for _ in 0..4 {
                     if *offset == frame.data.len() || channel.buffered_amount() >= 64 * 1024 {
                         break;
@@ -768,8 +843,12 @@ async fn run(
                     tokio::select! {
                         _ = cancelled.changed() => return Ok(()),
                         result = tokio::time::timeout(Duration::from_millis(500), endpoint.socket.send_to(&packet.contents, packet.destination)) => {
-                            result.map_err(|_| "The video connection stalled. Try Save battery or a faster network.")?
-                                .map_err(|_| "The video connection was interrupted.")?;
+                            // A roaming phone or a full interface queue fails single sends.
+                            // WebRTC recovers from loss; only a lasting failure ends the view.
+                            let sent = result.map_err(|_| "The video connection stalled. Try Save battery or a faster network.")?.is_ok();
+                            if send_failures.record(Instant::now(), sent) {
+                                return Err("The video connection was interrupted.".into());
+                            }
                         }
                     }
                 }
@@ -891,14 +970,9 @@ async fn run(
                     if rtc.accepts(&input) { let _ = rtc.handle_input(input); }
                 }
             }
-            Some(frame) = frames.recv(), if connected && (!original || image_transfer.is_none()) => {
-                if original {
-                    if frame.queued.elapsed() <= Duration::from_secs(2) {
-                        image_sequence = image_sequence.wrapping_add(1);
-                        image_transfer = Some((frame, image_sequence, 0, Instant::now()));
-                    }
-                    continue;
-                }
+            // Only a wake-up: the next pass takes the newest picture itself.
+            _ = latest.ready.notified(), if original && connected && image_transfer.is_none() => {}
+            Some(frame) = frames.recv(), if connected && !original => {
                 if frame.queued.elapsed() > Duration::from_millis(150) {
                     waiting_for_keyframe = true;
                     needs_keyframe.store(true, Ordering::Release);
@@ -919,6 +993,18 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn udp_send_loss_recovers_but_sustained_failure_times_out() {
+        let began = Instant::now();
+        let mut failures = SendFailures::default();
+        assert!(!failures.record(began, false));
+        assert!(!failures.record(began + Duration::from_secs(4), false));
+        assert!(!failures.record(began + Duration::from_secs(5), true));
+        assert!(!failures.record(began + Duration::from_secs(6), false));
+        assert!(!failures.record(began + Duration::from_secs(10), false));
+        assert!(failures.record(began + Duration::from_secs(12), false));
+    }
+
     #[test]
     fn levels_limit_resolution_and_macroblock_rate() {
         assert_eq!(capture_limits(DisplayQuality::Auto, 31), (896, 60, 3_000_000));

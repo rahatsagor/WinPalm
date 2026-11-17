@@ -1841,12 +1841,17 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
         // Larger than the SCTP send buffer: correct delivery requires the
         // sender to honor backpressure rather than enqueueing a whole frame.
         let image: Vec<u8> = (0..300_000).map(|i| (i * 31 + i / 7) as u8).collect();
+        // Both arrive while the first picture is in flight. A still screen
+        // sends nothing more, so the phone must end on the newest one.
+        let skipped: Vec<u8> = image.iter().map(|byte| byte ^ 0x55).collect();
+        let newest: Vec<u8> = image.iter().rev().copied().collect();
+        let mut pictures: Vec<Vec<u8>> = Vec::new();
         let mut received = Vec::new();
         let mut buffer = [0; 2048];
         let mut pulse = tokio::time::interval(Duration::from_millis(20));
         let began = Instant::now(); let mut generation = None; let mut sent = false;
-        while received.len() < image.len() {
-            assert!(began.elapsed() < Duration::from_secs(8), "HD picture transfer stalled at {} bytes", received.len());
+        while pictures.len() < 2 {
+            assert!(began.elapsed() < Duration::from_secs(12), "HD picture transfer stalled at {} bytes", received.len());
             let deadline = loop {
                 match receiver.poll_output().unwrap() {
                     Output::Timeout(deadline) => break deadline,
@@ -1856,7 +1861,13 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
                         assert_eq!(&data.data[..4], b"CPNG");
                         assert_eq!(u32::from_le_bytes(data.data[8..12].try_into().unwrap()) as usize, image.len());
                         assert_eq!(u32::from_le_bytes(data.data[12..16].try_into().unwrap()) as usize, received.len());
+                        if pictures.is_empty() && received.is_empty() {
+                            let generation = generation.unwrap();
+                            assert!(f.host.display_frame(session, generation, skipped.clone(), 1, true));
+                            assert!(f.host.display_frame(session, generation, newest.clone(), 2, true));
+                        }
                         received.extend_from_slice(&data.data[16..]);
+                        if received.len() == image.len() { pictures.push(std::mem::take(&mut received)); }
                     }
                     _ => {}
                 }
@@ -1884,7 +1895,9 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
                 }
             }
         }
-        assert_eq!(received, image, "encrypted transport must preserve original picture bytes exactly");
+        assert!(pictures[0] == image, "encrypted transport must preserve original picture bytes exactly");
+        assert!(pictures[1] != skipped, "a picture replaced while waiting must not be sent");
+        assert!(pictures[1] == newest, "the newest picture must follow the one in flight");
         send(&mut ws, json!({"t":"displayStop", "id":2})).await;
         loop { if recv_kind(&mut ws, "displayState").await["state"] == "stopped" { break; } }
         assert!(!f.host.display_frame(session, generation.unwrap(), image, 1, true));
@@ -1912,4 +1925,69 @@ fn an_unreadable_device_list_preserves_tokens_and_refuses_to_overwrite_the_file(
     assert!(path.is_dir(), "a remembered pairing must not replace an unreadable list");
     assert_eq!(f.host.pairing_info().pin, pin, "refused pairing must not consume the PIN");
     assert!(f.host.trusted_devices().is_empty());
+}
+
+#[test]
+fn repeated_display_list_requests_share_one_answer_instead_of_failing() {
+    let f = fixture();
+    let mut config = f.config.clone();
+    config.display_enabled = true;
+    f.host.update_config(config);
+    f.host.set_pin_shown(true);
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        send(&mut ws, hello("lister", json!({"method":"pin", "pin":f.host.pairing_info().pin}))).await;
+        recv_kind(&mut ws, "welcome").await;
+        f.host.set_display_allowed("lister".into(), true);
+        recv_kind(&mut ws, "displayAccess").await;
+        let session = f.host.connected_devices()[0].session;
+        let lists = |f: &Fixture| {
+            let commands = f.delegate.display_commands.lock().unwrap();
+            commands.iter().filter(|(_, command)| matches!(command, DisplayCommand::List { .. })).count()
+        };
+        let display = crate::protocol::DisplayInfo {
+            id: "monitor".into(),
+            name: "Test".into(),
+            width: 1920,
+            height: 1080,
+            main: true,
+        };
+
+        // A second request during the native query receives that query's answer.
+        send(&mut ws, json!({"t":"displays", "id":1})).await;
+        send(&mut ws, json!({"t":"displays", "id":2})).await;
+        send(&mut ws, json!({"t":"ping", "id":1})).await;
+        recv_kind(&mut ws, "pong").await;
+        assert_eq!(lists(&f), 1, "overlapping requests must not start overlapping native queries");
+        f.host.display_sources(session, 1, vec![display.clone()], None);
+        let sources = recv_kind(&mut ws, "displays").await;
+        assert_eq!(sources["id"], 2, "the answer belongs to the phone's newest request");
+        assert_eq!(sources["displays"][0]["id"], "monitor");
+        f.host.display_sources(session, 1, vec![], None);
+
+        // A double tap right after an answer still shows the displays.
+        send(&mut ws, json!({"t":"displays", "id":3})).await;
+        send(&mut ws, json!({"t":"ping", "id":2})).await;
+        // A cached list is sent before the pong. Keep it rather than letting
+        // recv_kind discard the very response this test is checking.
+        let mut cached = None;
+        loop {
+            let message = recv(&mut ws).await;
+            if message["t"] == "displays" {
+                cached = Some(message);
+            } else if message["t"] == "pong" {
+                break;
+            }
+        }
+        // A slow test machine can outlast the repeat window and query again.
+        if lists(&f) == 2 {
+            f.host.display_sources(session, 3, vec![display], None);
+        }
+        let repeated = match cached {
+            Some(message) => message,
+            None => recv_kind(&mut ws, "displays").await,
+        };
+        assert_eq!(repeated["id"], 3);
+        assert_eq!(repeated["displays"][0]["id"], "monitor", "a repeated request must never hide the displays");
+    });
 }
