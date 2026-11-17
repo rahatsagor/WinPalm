@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onDeactivated, ref } from 'vue'
 import { haptic, holdPointer } from '@/lib/haptics'
 import { onPageHidden } from '@/lib/heldPointers'
-import { buttonDown, buttonUp, click } from '@/lib/input'
+import { buttonDown, click } from '@/lib/input'
 import type { MouseButton } from '@/lib/protocol'
 import HapticSwitch from './HapticSwitch.vue'
 
@@ -11,20 +11,22 @@ withDefaults(defineProps<{ vertical?: boolean }>(), { vertical: false })
 // Physical-style buttons: hold one with a thumb and move with another finger
 // to drag.
 const held = ref<Record<string, number | null>>({ left: null, right: null })
+const releases = new Map<MouseButton, () => void>()
 
 function down(button: MouseButton, event: PointerEvent) {
   holdPointer(event)
   if (held.value[button] != null) return
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
   held.value[button] = event.pointerId
-  buttonDown(button)
+  releases.set(button, buttonDown(button))
   haptic('light')
 }
 
 function up(button: MouseButton, event: PointerEvent) {
   if (held.value[button] !== event.pointerId) return
   held.value[button] = null
-  buttonUp(button)
+  releases.get(button)?.()
+  releases.delete(button)
 }
 
 // Hidden or removed while held, the button would never see its finger lift.
@@ -32,7 +34,8 @@ function letGo() {
   for (const button of ['left', 'right'] as const) {
     if (held.value[button] == null) continue
     held.value[button] = null
-    buttonUp(button)
+    releases.get(button)?.()
+    releases.delete(button)
   }
 }
 onDeactivated(letGo)

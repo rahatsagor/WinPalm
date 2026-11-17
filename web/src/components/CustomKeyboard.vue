@@ -5,7 +5,7 @@ import { MEDIA } from '@/lib/actions'
 import { labels, state } from '@/lib/connection'
 import { actionLabel, actionName, emptyCells, fits, newId, type CustomKey, type CustomKeyboard } from '@/lib/customKeyboards'
 import { haptic, keyHaptic } from '@/lib/haptics'
-import { buttonDown, buttonUp, keyDown, keyUp, modifiers, pressMedia } from '@/lib/input'
+import { buttonDown, keyDown, keyUp, modifiers, pressMedia } from '@/lib/input'
 import { ALL_MODS, Key } from '@/lib/keys'
 import { symbol } from '@/lib/symbols'
 import { useTouchKeys } from '@/lib/touchKeys'
@@ -88,8 +88,7 @@ function press(key: CustomKey, pointerId: number) {
       return () => stop()
     }
     case 'mouse':
-      buttonDown(action.button)
-      return () => buttonUp(action.button)
+      return buttonDown(action.button)
   }
 }
 

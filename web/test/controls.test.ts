@@ -35,6 +35,60 @@ const readerClick = (el: Element) => el.dispatchEvent(new MouseEvent('click', { 
 const enter = (el: Element) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
 
 describe('controls used without touch', () => {
+  it('ignores old button and media cleanup after release, pause and reconnect', async () => {
+    const socket = connect()
+    const input = await import('../src/lib/input')
+    for (const reset of [() => input.releaseAll(), () => { socket.receive({ t: 'paused', paused: true }); socket.receive({ t: 'paused', paused: false }) }]) {
+      const oldButton = input.buttonDown('left')
+      const oldMedia = input.pressMedia('rewind')
+      reset()
+      const newButton = input.buttonDown('left')
+      const newMedia = input.pressMedia('rewind')
+      const before = socket.sent.length
+      oldButton(); oldButton(); oldMedia(); oldMedia()
+      expect(socket.sent).toHaveLength(before)
+      newButton(); newMedia()
+      expect(socket.sent.slice(-2)).toMatchObject([{ t: 'button', op: 'up' }, { t: 'media', op: 'up' }])
+    }
+    const old = input.pressMedia('rewind')
+    socket.drop()
+    conn.retryNow(); lastSocket().open(); lastSocket().receive(welcome)
+    const current = input.pressMedia('rewind')
+    const before = lastSocket().sent.length
+    old()
+    expect(lastSocket().sent).toHaveLength(before)
+    current()
+    expect(lastSocket().sent.at(-1)).toMatchObject({ t: 'media', op: 'up' })
+  })
+  it('keeps shared mouse and seeking keys held until the last finger lifts', async () => {
+    const socket = connect()
+    const input = await import('../src/lib/input')
+    input.buttonDown('left')
+    input.buttonDown('left')
+    input.buttonUp('left')
+    expect(socket.sent.filter((m) => m.t === 'button')).toMatchObject([{ button: 'left', op: 'down' }])
+    input.buttonUp('left')
+    expect(socket.sent.filter((m) => m.t === 'button')).toMatchObject([{ op: 'down' }, { op: 'up' }])
+
+    const first = input.pressMedia('rewind')
+    const second = input.pressMedia('rewind')
+    first()
+    first()
+    expect(socket.sent.filter((m) => m.t === 'media')).toMatchObject([{ key: 'rewind', op: 'down' }])
+    second()
+    expect(socket.sent.filter((m) => m.t === 'media')).toMatchObject([{ op: 'down' }, { op: 'up' }])
+
+    input.buttonDown('left')
+    input.pressMedia('rewind')
+    input.releaseAll()
+    const before = socket.sent.length
+    input.buttonUp('left')
+    input.media('rewind', 'up')
+    expect(socket.sent).toHaveLength(before)
+    input.buttonDown('left')
+    expect(socket.sent.at(-1)).toMatchObject({ t: 'button', op: 'down' })
+  })
+
   it('reorders local tabs with Alt + Left without sending a lone Alt to Windows', async () => {
     const socket = connect()
     const { installHardwareKeyboard } = await import('../src/lib/hardware')

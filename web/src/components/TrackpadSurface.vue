@@ -4,11 +4,11 @@ import { pointer, runAction } from '@/lib/connection'
 import { GestureRecognizer, type Direction, type GestureHandler } from '@/lib/gestures'
 import { haptic, holdPointer } from '@/lib/haptics'
 import { onPageHidden } from '@/lib/heldPointers'
-import { beginPointerGesture, buttonDown, buttonUp, click, tap } from '@/lib/input'
+import { beginPointerGesture, buttonDown, click, tap } from '@/lib/input'
 import { Key } from '@/lib/keys'
 import { layout } from '@/lib/layout'
 import { PointerGain } from '@/lib/pointerGain'
-import { GestureKind, Mod, ScrollPhase } from '@/lib/protocol'
+import { GestureKind, Mod, ScrollPhase, type MouseButton } from '@/lib/protocol'
 import { settings, type GestureMap } from '@/lib/settings'
 import HapticSwitch from './HapticSwitch.vue'
 
@@ -27,6 +27,7 @@ const reach = computed(() => {
 })
 const touches = reactive(new Map<number, { x: number; y: number }>())
 const dragging = ref(false)
+const buttonReleases = new Map<MouseButton, () => void>()
 
 const acceleration = new PointerGain()
 const gain = (dx: number, dy: number, dt: number) =>
@@ -64,11 +65,12 @@ const handler: GestureHandler = {
   },
   click: (button) => click(button),
   buttonDown: (button) => {
-    buttonDown(button)
+    if (!buttonReleases.has(button)) buttonReleases.set(button, buttonDown(button))
     dragging.value = true
   },
   buttonUp: (button) => {
-    buttonUp(button)
+    buttonReleases.get(button)?.()
+    buttonReleases.delete(button)
     dragging.value = false
   },
   swipe: (fingers: number, direction: Direction) => runGesture(fingers >= 4 ? settings.fourFinger : settings.threeFinger, direction),
@@ -100,10 +102,12 @@ const recognizer = new GestureRecognizer(handler, options.value)
 watch(options, (value) => (recognizer.options = value))
 function resetSurface() {
   recognizer.reset()
+  for (const release of buttonReleases.values()) release()
+  buttonReleases.clear()
   dragging.value = false
   touches.clear()
 }
-onBeforeUnmount(() => recognizer.reset())
+onBeforeUnmount(resetSurface)
 // A finger down when the tab changes, control pauses, or the page hides never
 // reports lifting; without this it would count as a second finger on return,
 // turning pointing into scrolling, or leave drag lock visually stuck.
