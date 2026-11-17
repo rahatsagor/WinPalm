@@ -28,7 +28,7 @@ pub struct HostConfig {
     pub allow_shell: bool,
     /// Whether the PC can transcribe speech streamed from the phone.
     pub voice_available: bool,
-    /// Screen viewing needs a separate explicit opt-in on the PC.
+    /// Screen mirroring needs a separate explicit opt-in on the PC.
     #[serde(default)]
     pub display_enabled: bool,
     /// Listen on 127.0.0.1 only. The Windows self-tests use this so they
