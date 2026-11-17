@@ -1160,6 +1160,38 @@ fn deck_saves_acknowledge_persistence_and_reject_stale_revisions() {
 }
 
 #[test]
+fn ambiguous_deck_ids_are_rejected_before_import_save_and_sync() {
+    let f = fixture();
+    let initial: Value = serde_json::from_str(&f.host.deck_json()).unwrap();
+    f.host.set_deck_json(initial.to_string()).unwrap();
+    let path = std::path::Path::new(&f.config.data_dir).join("deck.json");
+    let before = std::fs::read(&path).unwrap();
+    f.rt.block_on(async {
+        let mut ws = connect(f.port).await;
+        let code = f.host.pairing_info().link.split("#pair=").nth(1).unwrap().to_string();
+        send(&mut ws, hello("phone", json!({"method":"pair", "code":code}))).await;
+        let welcome = recv_kind(&mut ws, "welcome").await;
+        for problem in 0..4 {
+            let mut invalid = initial.clone();
+            match problem {
+                0 => invalid["pages"][0]["id"] = json!(""),
+                1 => invalid["pages"][1]["id"] = invalid["pages"][0]["id"].clone(),
+                2 => invalid["pages"][0]["tiles"][0]["id"] = json!(""),
+                _ => invalid["pages"][0]["tiles"][1]["id"] = invalid["pages"][0]["tiles"][0]["id"].clone(),
+            }
+            assert!(f.host.set_deck_json(invalid.to_string()).is_err(), "native imports must validate IDs");
+            send(&mut ws, json!({"t":"deckSave", "id":problem, "deck":invalid, "revision":welcome["deckRevision"]}))
+                .await;
+            let refused = recv_kind(&mut ws, "deckSaved").await;
+            assert_eq!(refused["ok"], false);
+            assert_eq!(refused["revision"], welcome["deckRevision"]);
+            assert_eq!(serde_json::from_str::<Value>(&f.host.deck_json()).unwrap(), initial);
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    });
+}
+
+#[test]
 fn failed_deck_writes_are_acknowledged_without_changing_the_deck() {
     let f = fixture();
     std::fs::create_dir(std::path::Path::new(&f.config.data_dir).join("deck.json")).unwrap();

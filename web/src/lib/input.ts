@@ -1,6 +1,6 @@
 // High-level input helpers shared by the trackpad, keyboards and deck.
 
-import { send, onMessage, pointer, labels, isOpen } from './connection'
+import { send, onMessage, pointer, labels, isOpen, state as connection } from './connection'
 import { haptic } from './haptics'
 import { Key, MODIFIER_CODES } from './keys'
 import { Modifiers } from './modifiers'
@@ -18,6 +18,9 @@ watch(() => settings.stickyModifiers, () => modifiers.reset(true))
 const heldKeys = new Map<number, number>()
 /** Fingers holding each key code: the PC has one key, released by the last. */
 const keyCount = new Map<number, number>()
+const buttonCount = new Map<MouseButton, number>()
+const mediaCount = new Map<MediaKey, number>()
+let holdEpoch = 0
 
 /** Stepping keys still repeating, so Release all can stop them. */
 const repeating = new Set<() => void>()
@@ -28,9 +31,12 @@ function stopRepeating() {
 
 /** The PC let go of everything this device held; press locks again. */
 function macReleased(restore: boolean) {
+  holdEpoch++
   stopRepeating()
   heldKeys.clear()
   keyCount.clear()
+  buttonCount.clear()
+  mediaCount.clear()
   if (!restore) modifiers.dropTouches()
   if (restore) modifiers.restoreLocks()
 }
@@ -40,6 +46,9 @@ onMessage((message) => {
   if (message.t === 'welcome') macReleased(true)
   else if (message.t === 'paused') macReleased(!message.paused)
 })
+watch(() => connection.status, status => {
+  if (status !== 'connected') macReleased(false)
+}, { flush: 'sync' })
 
 if (typeof document !== 'undefined') {
   // The connection sends a release when the page hides.
@@ -103,10 +112,23 @@ export function click(button: MouseButton = 'left') {
 
 export function buttonDown(button: MouseButton = 'left') {
   const mods = modifiers.use()
-  send({ t: 'button', button, op: 'down', mods })
+  const count = buttonCount.get(button) ?? 0
+  buttonCount.set(button, count + 1)
+  if (count === 0) send({ t: 'button', button, op: 'down', mods })
+  const epoch = holdEpoch
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (epoch === holdEpoch) buttonUp(button)
+  }
 }
 
 export function buttonUp(button: MouseButton = 'left') {
+  const count = buttonCount.get(button)
+  if (count === undefined) return
+  if (count > 1) { buttonCount.set(button, count - 1); return }
+  buttonCount.delete(button)
   send({ t: 'button', button, op: 'up' })
 }
 
@@ -116,6 +138,16 @@ export function beginPointerGesture() {
 }
 
 export function media(key: MediaKey, op: 'down' | 'up' | 'click' = 'click') {
+  if (op === 'down') {
+    const count = mediaCount.get(key) ?? 0
+    mediaCount.set(key, count + 1)
+    if (count > 0) return
+  } else if (op === 'up') {
+    const count = mediaCount.get(key)
+    if (count === undefined) return
+    if (count > 1) { mediaCount.set(key, count - 1); return }
+    mediaCount.delete(key)
+  }
   send({ t: 'media', key, op })
 }
 
@@ -136,7 +168,9 @@ if (typeof document !== 'undefined') {
 export function pressMedia(key: MediaKey): () => void {
   if (SEEKING.has(key)) {
     media(key, 'down')
-    return () => media(key, 'up')
+    const epoch = holdEpoch
+    let released = false
+    return () => { if (!released) { released = true; if (epoch === holdEpoch) media(key, 'up') } }
   }
   media(key, 'click')
   if (!STEPPING.has(key)) return () => {}
@@ -168,9 +202,12 @@ export function edit(deleteCount: number, insert: string): boolean {
 }
 
 export function releaseAll() {
+  holdEpoch++
   stopRepeating()
   heldKeys.clear()
   keyCount.clear()
+  buttonCount.clear()
+  mediaCount.clear()
   modifiers.reset(false)
   pointer.reset()
   send({ t: 'release' })
