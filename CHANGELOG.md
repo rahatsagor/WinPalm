@@ -4,6 +4,9 @@
 
 ### Windows app
 
+- Keep local control usable when Remote Desktop Services is stopped. If the
+  WTS query fails, require Windows to confirm the Default desktop is receiving
+  input; locked, disconnected and unverifiable states remain blocked.
 - Preserve unreadable, corrupt and newer paired-device files and phone tokens.
   Refuse remembered pairing until recovery, and expose an intentional reset in
   Devices. Validate saved HTTPS key/certificate pairs and the full server chain,
@@ -36,6 +39,11 @@
 
 ### Phone client
 
+- Release click-bar and Media controls when pointer capture is lost. Cancel
+  pending volume updates on pause, hiding or leaving Media, and run pause
+  cleanup synchronously so rapid pause/resume cannot skip it.
+- Close a globally disabled mirror even while its monitor list is refreshing,
+  and ignore stale replies from the superseded list query.
 - Keep the monitor list and authorized live video/HD view through repeated
   refreshes. Retain the newest waiting HD picture under backpressure and tolerate
   transient UDP send errors while still timing out sustained failure.
