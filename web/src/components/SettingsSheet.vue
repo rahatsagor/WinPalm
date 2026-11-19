@@ -6,6 +6,8 @@ import {
   Hand,
   Keyboard,
   LayoutGrid,
+  Lock,
+  LockOpen,
   LogOut,
   Maximize,
   Minimize,
@@ -13,8 +15,6 @@ import {
   RotateCcw,
   Touchpad,
   Unplug,
-  Wifi,
-  WifiOff,
 } from '@lucide/vue'
 import { computed, nextTick, ref, useId } from 'vue'
 import { appNames } from '@/lib/apps'
@@ -40,8 +40,22 @@ import Toggle from './Toggle.vue'
 const CopySettingsSheet = lazy(() => import('./CopySettingsSheet.vue'))
 const BackupSheet = lazy(() => import('./BackupSheet.vue'))
 const emit = defineEmits<{ close: [] }>()
-const secure = location.protocol === 'https:'
+const secure = computed(() => state.features.secure || location.protocol === 'https:')
 const encryptedSetup = 'On the PC, open Phone setup → Encrypted HTTPS & Voice Typing. Follow the certificate steps for this device, then scan the Encrypted HTTPS QR code on Connect.'
+const dictationHelp = computed(() => {
+  if (state.features.voice && voiceSupported()) {
+    return 'Voice typing is ready. Tap the microphone button in the typing panel to dictate onto your PC.'
+  }
+  if (!secure.value) {
+    return state.features.voice
+      ? 'Voice typing needs a trusted HTTPS connection so this browser can use the microphone. On your PC, open WinPalm → Phone setup → Encrypted HTTPS & Voice Typing.'
+      : 'To dictate, open WinPalm over a trusted HTTPS connection (PC WinPalm → Phone setup → Encrypted HTTPS & Voice Typing) and turn on “Enable local voice typing” in General.'
+  }
+  if (!state.features.voice) {
+    return 'Voice typing is turned off or no offline Windows speech recognizer is ready on this PC. Open WinPalm → General, turn on “Enable local voice typing”, and use Check setup.'
+  }
+  return 'This browser cannot access the microphone here. Trust WinPalm’s certificate on this device or use a browser that supports microphone capture over HTTPS.'
+})
 const connectionStatus = computed(() => {
   if (state.status === 'connected') return 'Connected'
   if (state.status === 'reconnecting') return 'Reconnecting…'
@@ -127,19 +141,25 @@ const times = (v: number) => `${v.toFixed(1)}×`
 <template>
   <Sheet ref="sheet" title="Settings" full @close="emit('close')">
     <section class="card">
-      <div class="py-3">
-        <div class="flex items-center gap-2">
-          <div class="min-w-0 flex-1 truncate text-[16px] font-semibold" :title="state.hostName">{{ state.hostName || 'PC' }}</div>
-          <span class="flex shrink-0 items-center gap-1 rounded-full bg-surface-3 px-2.5 py-1 text-[12px] font-medium text-muted">
-            <Wifi v-if="state.status === 'connected'" :size="14" aria-hidden="true" />
-            <WifiOff v-else :size="14" aria-hidden="true" />
-            {{ connectionStatus }}
-          </span>
+      <div class="flex items-center justify-between gap-3 py-3">
+        <div class="min-w-0 flex-1">
+          <div class="truncate text-[16px] font-semibold" :title="state.hostName">{{ state.hostName || 'PC' }}</div>
+          <div class="text-[13px] tabular-nums text-muted">
+            WinPalm {{ state.hostVersion }} · {{ connectionStatus }}<span v-if="state.status === 'connected'"> · {{ state.latency || '<1' }} ms</span>
+          </div>
         </div>
-        <p class="text-[13px] tabular-nums text-muted">
-          WinPalm {{ state.hostVersion }}<span v-if="state.status === 'connected'"> · {{ state.latency || '<1' }} ms</span>
-        </p>
+        <span
+          class="flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium"
+          :class="secure ? 'bg-good/15 text-good' : 'bg-warn/15 text-warn'"
+        >
+          <Lock v-if="secure" :size="12" aria-hidden="true" /><LockOpen v-else :size="12" aria-hidden="true" />
+          {{ secure ? 'Encrypted' : 'Not encrypted' }}
+        </span>
       </div>
+      <p v-if="!secure" class="pb-3 text-[13px] leading-snug text-muted">
+        Others on this Wi-Fi could see what you type. To set up an encrypted connection, open WinPalm on the PC and
+        choose <b>Phone setup → Encrypted HTTPS &amp; Voice Typing</b>. Voice typing and some phone features need it too.
+      </p>
     </section>
 
     <div class="mt-2">
@@ -355,16 +375,7 @@ const times = (v: number) => `${v.toFixed(1)}×`
           <h3 class="section">Dictation setup</h3>
           <section class="card py-3">
             <p class="text-[13px] leading-relaxed text-muted">
-              Tap the microphone in the typing panel and allow microphone access. WinPalm transcribes speech on the PC using an installed offline Windows speech recognizer.
-            </p>
-            <p v-if="!secure" class="mt-2 text-[13px] leading-relaxed text-muted">
-              Dictation needs a trusted HTTPS connection. {{ encryptedSetup }}
-            </p>
-            <p v-else-if="!voiceSupported()" class="mt-2 text-[13px] leading-relaxed text-muted">
-              This browser can’t open the microphone for dictation. Try a browser with microphone access over trusted HTTPS.
-            </p>
-            <p v-if="!state.features.voice" class="mt-2 text-[13px] leading-relaxed text-muted">
-              On the PC, open WinPalm’s General settings. Turn on <strong>Enable local voice typing</strong> and use <strong>Check setup</strong> to check the installed recognizer.
+              {{ dictationHelp }}
             </p>
           </section>
           <h3 class="section">Text compatibility</h3>

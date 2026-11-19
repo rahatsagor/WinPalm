@@ -12,6 +12,30 @@ const MODIFIERS: Record<string, number> = {
 
 const down = new Set<number>()
 
+const INTERACTIVE = 'button, a[href], summary, [role="button"], [role="switch"], [role="tab"], [role="radio"], [role="option"], [role="menuitem"], [role="checkbox"], [role="slider"]'
+const REMOTE_TAB_MODS = [Key.Command, Key.RightCommand, Key.Control, Key.RightControl, Key.Option, Key.RightOption]
+const CLEANUP_KEY = Symbol.for('winpalm.hardwareKeyboard')
+
+function activatesControl(event: KeyboardEvent): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey) return false
+  if (event.key !== 'Enter' && event.key !== ' ' && event.code !== 'Enter' && event.code !== 'NumpadEnter' && event.code !== 'Space') return false
+  const el = event.target as Element | null
+  return !!el?.closest?.(INTERACTIVE)
+}
+
+function navigatesControls(event: KeyboardEvent): boolean {
+  return (event.key === 'Tab' || event.code === 'Tab') && !event.metaKey && !event.ctrlKey && !event.altKey
+    && !REMOTE_TAB_MODS.some(mod => down.has(mod))
+}
+
+// Alt + Arrow reorders the phone's tabs. Forwarding its Alt press first
+// would leave a standalone Alt tap on Windows and activate the PC's menu.
+function localTabReorder(event: KeyboardEvent): boolean {
+  if (event.key !== 'Alt' && event.code !== 'AltLeft' && event.code !== 'AltRight') return false
+  const el = event.target as Element | null
+  return !!el?.closest?.('[data-group-id]')
+}
+
 function editable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   return !!el && (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')
@@ -22,12 +46,10 @@ function codeFor(event: KeyboardEvent): number | undefined {
 }
 
 function onKeyDown(event: KeyboardEvent) {
-  // Sheets keep the keyboard for their own fields and Escape-to-close, and a
-  // focused button that took Return or Space has used it.
-  const localControl = event.target instanceof Element && event.target.closest('button, a[href], [role="button"], [role="tab"], [role="radio"], [role="switch"], [role="slider"]')
-  // Alt + Arrow reorders the phone's tabs. Forwarding its Alt press first
-  // would leave a standalone Alt tap on Windows and activate the PC's menu.
-  if (editable(event.target) || localControl || event.isComposing || event.defaultPrevented || document.querySelector('[role="dialog"]')) return
+  // Sheets keep the keyboard for their own fields and Escape-to-close; unmodified
+  // Tab moves between phone controls, and focused controls keep Enter and Space.
+  if (event.isComposing || event.defaultPrevented || document.querySelector('[role="dialog"]')) return
+  if (navigatesControls(event) || editable(event.target) || activatesControl(event) || localTabReorder(event)) return
   const code = codeFor(event)
   if (code === undefined) return
   event.preventDefault()
@@ -50,6 +72,11 @@ export function releaseHardwareKeys() {
 }
 
 export function installHardwareKeyboard() {
+  const host = globalThis as unknown as { [CLEANUP_KEY]?: () => void }
+  host[CLEANUP_KEY]?.()
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') down.clear()
+  }
   addEventListener('keydown', onKeyDown)
   addEventListener('keyup', onKeyUp)
   // Key-up events are lost when focus leaves the page mid-press.
@@ -57,10 +84,16 @@ export function installHardwareKeyboard() {
   // The PC lets go of every key on reconnect, on pause and when the page
   // hides. Forgetting them here lets a key still held press again on its
   // next repeat instead of being ignored.
-  onMessage((message) => {
+  const offMessage = onMessage((message) => {
     if (message.t === 'welcome' || message.t === 'paused') down.clear()
   })
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') down.clear()
-  })
+  document.addEventListener('visibilitychange', onVisibility)
+  host[CLEANUP_KEY] = () => {
+    removeEventListener('keydown', onKeyDown)
+    removeEventListener('keyup', onKeyUp)
+    removeEventListener('blur', releaseHardwareKeys)
+    document.removeEventListener('visibilitychange', onVisibility)
+    offMessage()
+    releaseHardwareKeys()
+  }
 }

@@ -74,11 +74,19 @@ describe('fullscreen display accessibility', () => {
     const received = vi.fn()
     window.addEventListener('keydown', received)
     try {
-      await button(view, 'Exit').trigger('keydown', { key: 'Enter', code: 'Enter' })
+      const region = view.get('[aria-label="Fullscreen PC display"]')
+      const fsStop = region.findAll('button').find(item => item.text() === 'Stop')!
+      const fsExit = region.findAll('button').find(item => item.text() === 'Exit')!
+      ;(fsStop.element as HTMLElement).focus()
+      await fsStop.trigger('keydown', { key: 'Tab', code: 'Tab' })
+      ;(fsExit.element as HTMLElement).focus()
+      await fsExit.trigger('keydown', { key: 'Tab', code: 'Tab', shiftKey: true })
       expect(received).not.toHaveBeenCalled()
-      await view.get('[aria-label="Fullscreen PC display"]').trigger('keydown', { key: 'a', code: 'KeyA' })
+      await fsExit.trigger('keydown', { key: 'Enter', code: 'Enter' })
+      expect(received).not.toHaveBeenCalled()
+      await region.trigger('keydown', { key: 'a', code: 'KeyA' })
       expect(received).toHaveBeenCalledOnce()
-      await view.get('[aria-label="Fullscreen PC display"]').trigger('keydown', { key: 'Escape', code: 'Escape' })
+      await region.trigger('keydown', { key: 'Escape', code: 'Escape' })
       expect(document.querySelector('#outside')!.hasAttribute('inert')).toBe(false)
     } finally { window.removeEventListener('keydown', received) }
   })
@@ -113,5 +121,30 @@ describe('fullscreen display accessibility', () => {
     visible.value = true
     await nextTick()
     expect(wrapper!.find('[aria-label="Fullscreen PC display"]').exists()).toBe(false)
+  })
+
+  it('extends only a right-side scroll strip to the outer screen edge in wide display mode', async () => {
+    let resize: ResizeObserverCallback | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: ResizeObserverCallback) { resize = cb }
+      observe() {}
+      disconnect() {}
+    })
+    const { view } = await mountViewer()
+    const { settings } = await import('../src/lib/settings')
+    settings.displayControls = 'trackpad'
+    settings.scrollStrip = 'short'
+    settings.scrollStripEdge = true
+    resize?.([{ contentRect: { width: 800, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver)
+
+    settings.scrollStripSide = 'right'
+    await nextTick()
+    const trackpad = view.get('.trackpad')
+    expect((trackpad.element as HTMLElement).style.marginRight).toBe('-0.5rem')
+
+    settings.scrollStripSide = 'left'
+    await nextTick()
+    expect((trackpad.element as HTMLElement).style.marginLeft).toBe('')
+    expect((trackpad.element as HTMLElement).style.marginRight).toBe('')
   })
 })

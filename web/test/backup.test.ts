@@ -73,12 +73,14 @@ describe('device backups', () => {
     expect(backup.exportBackup(123)).toBe(before)
   })
 
-  it('keeps newer preferences when restoring an older backup that lacks them', () => {
+  it('keeps newer preferences and ignores removed legacy ones when restoring an older backup', () => {
     const raw = JSON.parse(backup.exportBackup())
     delete raw.setup.settings.sidewaysTurn
+    raw.setup.settings.showAdvanced = true
     prefs.settings.sidewaysTurn = 'right'
     expect(backup.restoreBackup(backup.readBackup(JSON.stringify(raw)))).toBe(true)
     expect(prefs.settings.sidewaysTurn).toBe('right')
+    expect(prefs.settings).not.toHaveProperty('showAdvanced')
   })
 
   it('migrates legacy keyboard and scrollRail settings instead of rejecting them', () => {

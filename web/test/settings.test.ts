@@ -27,11 +27,13 @@ describe('migrating stored settings', () => {
   })
 
   it('drops values of the wrong type or outside the choices', () => {
-    const out = migrate({ theme: 'sepia', haptics: 'yes', scrollSpeed: 99, scrollStripWidth: 'huge' })
+    const out = migrate({ theme: 'sepia', haptics: 'yes', scrollSpeed: 99, scrollStripWidth: 'huge', showAdvanced: true, pointerSpeed: 1.8 })
     expect(out.theme).toBe('system')
     expect(out.scrollStripWidth).toBe('normal')
     expect(out.haptics).toBe(true)
     expect(out.scrollSpeed).toBe(4)
+    expect(out.pointerSpeed).toBe(1.8)
+    expect(out).not.toHaveProperty('showAdvanced')
   })
 
   it('migrates the previous keyboard setting to the PC keyboard', () => {
