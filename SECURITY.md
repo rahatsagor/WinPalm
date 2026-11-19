@@ -18,7 +18,7 @@ The server validates HTTP hosts, same-origin WebSocket upgrades, request sizes, 
 
 The app uses SendInput at the current user's integrity level. It does not install a service, driver or input hook, request UIAccess, or bypass UAC. Input to secure desktops and higher-integrity foreground processes is refused. Closing or losing a session releases its input; an idle-device watchdog also releases keys and buttons. Pause blocks control, cancels screen mirroring and dictation, and interrupts queued text and running shell jobs. Completed native operations and apps already launched are not undone.
 
-PowerShell and named automations are disabled by default. Both require the owner to enable command access on the PC. They inherit that owner's user permissions and can change or delete files. Jobs start suspended, enter a kill-on-close Job Object before execution, and stop on pause, disconnect, revocation, command-disable or a five-minute timeout. Disabling commands does not terminate unrelated apps. Ordinary URL actions allow HTTP, HTTPS and mailto; additional schemes require command permission. JavaScript and data URLs are always refused.
+PowerShell and named automations are disabled by default. Both require the owner to enable command access on the PC. They inherit that owner's user permissions and can change or delete files. Jobs start suspended, enter a kill-on-close Job Object before execution, and stop on pause, disconnect, revocation, command-disable or a five-minute timeout. Disabling commands does not terminate unrelated apps. Ordinary URL actions allow HTTP, HTTPS and mailto; additional schemes (including `file:`, `ssh:`, `sftp:`, `webdav:` and `vnc:`) require command permission. JavaScript and data URLs are always refused.
 
 App actions accept catalog identifiers rather than arbitrary phone-supplied executable paths. Owner-selected app folders are trusted launch sources. App close is a graceful request, so applications can ask to save work. Display brightness and media commands depend on OS, app and hardware support.
 
@@ -48,7 +48,7 @@ Only one viewer is active at a time. A host-generated generation binds every cap
 
 H.264 video and lossless PNG pictures travel directly over WebRTC with encrypted media/data channels, separate from the control WebSocket. There are no external STUN/TURN servers or cloud relays. Direct UDP connectivity is required; a TCP reverse proxy alone does not carry the stream. Screen mirroring works through HTTP or HTTPS, but HTTP still exposes authentication and signaling to on-path observation or modification. Use trusted HTTPS on networks where that matters.
 
-The browser clears playback and closes its peer when Display is left, the phone is backgrounded, or the connection ends. It must explicitly start viewing again. HD pictures have bounded sizes, dimensions, chunk ordering and transfer time; malformed or unexpected data is rejected before decoding.
+The browser clears playback and closes its peer when Display is left, the phone is backgrounded, or the connection ends. It must explicitly start viewing again. HD text sends up to four updates per second at up to 4K; full pictures and negotiated patches share a 16 MiB payload limit, 16 KiB chunks, bounded queues, and transfer timeouts. Malformed or unexpected data is rejected before decoding.
 
 ## Data and privacy
 

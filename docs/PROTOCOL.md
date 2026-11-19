@@ -181,7 +181,7 @@ can't read. Actions are the same objects deck buttons store, tagged by `kind`:
 | `text` | `text`, `enter` |
 | `media` | `key` |
 | `app` | `id` (opaque catalog identifier), `op`: `open`, `toggle`, `hide`, `quit` |
-| `url` | `url`, with surrounding spaces ignored. `http:`, `https:` and `mailto:` work normally; other schemes require shell permission. `javascript:` and `data:` are always refused |
+| `url` | `url`, with surrounding spaces ignored. `http:`, `https:` and `mailto:` work normally; other schemes (including `file:`, `ssh:`, `sftp:`, `ftps:`, `dav:`, `davs:`, `webdav:`, `webdavs:` and `vnc:`) require shell permission. `javascript:` and `data:` are always refused |
 | `system` | `name`, e.g. `missionControl`, `launchpad`, `lockScreen`, `screenshotArea`; see `SystemAction` |
 | `shortcut` | `name` of an owner-configured PowerShell automation; shell permission is required |
 | `shell` | `command`; refused unless allowed on the PC. Pause, disconnect, turning shell commands off, or a five-minute timeout terminates a running command's Windows job and its descendants. Programs a finished command started keep running. At most 32 commands are watched at once. |
@@ -327,7 +327,7 @@ access by themselves.
 | `displays` | `id` | Request the currently authorized display list. |
 | `displayAccessRequest` | `id` | Request native approval when `features.displayRequests` is true. |
 | `displayAccessCancel` | `id` | Cancel this session's matching pending request. |
-| `displayStart` | `id`, `displayId`, `quality`, `sdp` | Start a WebRTC offer for one listed display. `auto`, `battery`, and `sharp` use a receive-only video transceiver. `original` requires `features.displayOriginal` and uses a data channel. |
+| `displayStart` | `id`, `displayId`, `quality`, `sdp`, optional `patches` | Start a WebRTC offer for one listed display. `auto`, `battery`, and `sharp` use a receive-only video transceiver. `original` requires `features.displayOriginal` and uses a data channel. |
 | `displayAlive` | `id` | Renew the visible viewing lease. The PC ends it after four seconds without renewal. |
 | `displayStop` | `id` | Stop only the matching viewer owned by this session. |
 | `displayFocus` | `id` | Move the pointer to the selected monitor. Also requires Windows input permission. |
@@ -361,16 +361,25 @@ which are released when that capture ends.
 
 HD text (`original`) uses an ordered reliable data channel named
 `cmdpalm.original`, protected by DTLS. The PC sends lossless PNG pictures at up
-to one update per second. The image is bounded to a 3840 × 2160 pixel budget,
-including portrait orientation, and is not upscaled. Each PNG is limited to
-16 MiB and sent in binary messages of at most 16 KiB. A 16-byte header contains
-`CPNG`, a u32 sequence, u32 total PNG length, and u32 byte offset, all integers
-little-endian. The phone validates ordering, bounds, PNG signature, and IHDR
-dimensions before decoding. The stream uses bounded buffering and stops if a
-picture transfer stalls. One picture can be in flight and only the newest
-waiting picture is retained, so a static screen cannot end on an older queued
-picture. The same device grants, lease and stop controls apply
-to H.264 and HD text.
+to four updates per second and preserves source pixels up to 3840 on the longer
+edge and 3840 × 2160 pixels in total, in any shape or orientation, without
+upscaling. Clients that send `patches: true` can also receive changed regions
+after a full picture; older clients receive full pictures throughout.
+
+Every binary message is at most 16 KiB. Its 16-byte header contains the four
+ASCII bytes `CPNG` (full picture) or `CPAT` (patch), followed by three
+little-endian u32 values for sequence, total payload length, and byte offset.
+A full payload contains the PNG. A patch payload begins with four little-endian
+u16 values for x, y, full width, and full height, followed by the cropped PNG.
+Coordinates are measured in pixels from the top left. Each payload is limited
+to 16 MiB. The phone validates chunk ordering, PNG dimensions, and patch bounds
+before decoding.
+
+The sender holds one in-flight transfer and one waiting update, caps SCTP
+buffering at 256 KiB, and stops if a transfer takes more than 12 seconds. A full
+picture may replace a waiting update. Dependent patches travel in order, and the
+PC accumulates unsent changes while the waiting slot is occupied. The same
+device grants, lease and stop controls apply to H.264 and HD text.
 
 ## Phone settings
 

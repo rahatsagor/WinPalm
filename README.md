@@ -7,7 +7,7 @@
 ### Your PC, in your palm.
 
 See and control your Windows PC from your iPhone, iPad or Android phone.<br />
-Screen mirroring, trackpad, keyboard and shortcut deck, together in your browser.<br />
+Screen mirroring, trackpad, keyboard, shortcut deck and voice typing, together in your browser.<br />
 **No phone app. No account. Free and open source.**
 
 <br />
@@ -32,8 +32,6 @@ Screen mirroring, trackpad, keyboard and shortcut deck, together in your browser
 <a href="https://winpalm.rsapplication.com"><img src="docs/media/hero.webp" width="800" alt="WinPalm mirrors a Windows screen to a phone with trackpad and keyboard controls, shortcut Deck and voice typing" /></a>
 
 <sub><a href="https://winpalm.rsapplication.com/#film">▶ Watch the 101-second launch film</a> · <a href="https://winpalm.rsapplication.com">Try the interactive demo</a></sub>
-
-<sub>The film and demo preview the upcoming screen mirroring and phone Settings update. The latest Windows download is 0.3.2.</sub>
 
 </div>
 
@@ -71,11 +69,11 @@ Setup adds a Start menu shortcut. Desktop and sign-in shortcuts are optional. Cl
 
 Away from home? Use [Tailscale or a private VPN](#away-from-home-with-tailscale) and the PC’s VPN address.
 
-### New in 0.3.2
+### New in 1.0.0
 
-The Windows app now has a redesigned dark interface with grouped settings, rounded cards and scalable icons. **Connect** puts the QR code, six-digit PIN countdown, copyable phone address and **Standard HTTP / Encrypted HTTPS** switcher together. **Phone setup** guides certificate installation with phone-specific instructions, a certificate QR code and fingerprint copying.
+**Screen mirroring** brings a selected Windows monitor right to your phone alongside the trackpad or keyboard, or fullscreen. Choose adaptive H.264 video (with idle text refinement and lower browser playback delay) or **HD text · lossless** for up to 4K detail with dirty-rect updates up to four times per second.
 
-The latest release also fixes desktop page scrolling after navigation, resizing and reopening from the tray, following startup and installer replacement fixes in 0.3.1. Your existing pairings, settings, custom keyboards and Deck pages are retained. See the [changelog](CHANGELOG.md) for release details.
+**Phone Settings** are reorganized into **Trackpad**, **Gestures**, **Keyboard**, **Display** and **Deck** tabs, with an **Encrypted** / **Not encrypted** connection badge, adaptive dictation help, separate three- and four-finger gestures, and improved touch and keyboard navigation. WinPalm 1.0.0 also reduces idle background CPU wakeups, hardens HTTPS recovery and device-list preservation, and retains your existing pairings, settings, custom keyboards and Deck pages. See the [changelog](CHANGELOG.md) for full release details.
 
 ### Windows download and installation warnings
 
@@ -235,8 +233,8 @@ Speak into your phone and let a compatible installed Windows recognizer type on 
 #### Live screen mirroring
 See a selected Windows monitor right on your phone. Pick the display, choose
 how it fits beside your controls, zoom into details, or go fullscreen. HD text
-mode sends lossless pictures up to a 3840 × 2160 pixel budget, at up to one
-update per second.
+mode sends lossless pictures up to a 3840 × 2160 pixel budget and updates
+changed regions up to four times per second.
 
 </td>
 <td width="50%" valign="top">
@@ -262,7 +260,7 @@ and trusted HTTPS help. **Display** sets viewing quality, controls and preview
 space. **Deck** sets button size on this device.
 
 <p>
-<img src="docs/media/phone-settings-trackpad.webp" width="260" alt="Phone Settings showing the PC connection card, five feature tabs and Trackpad preferences" />
+<img src="docs/media/phone-settings-trackpad.webp" width="260" alt="Phone Settings showing the Encrypted badge, five feature tabs and Trackpad preferences" />
 <img src="docs/media/phone-settings-keyboard.webp" width="260" alt="Phone Settings with the Keyboard tab and its layout and typing preferences" />
 </p>
 
@@ -344,6 +342,8 @@ You can also download and run the latest **[WinPalm-Setup.exe](https://github.co
 Start with the **[documentation](https://winpalm.rsapplication.com/docs/)** for installation, pairing, HTTPS, Tailscale remote access, voice typing and settings. The **[guides](https://winpalm.rsapplication.com/guides/)** cover everyday workflows.
 
 - **Phone cannot connect:** check the shared LAN or VPN, the intended Windows network profile and Windows Firewall. The PC's Connect page links to network/firewall settings when it detects a problem. Do not expose WinPalm's port to the public internet.
+- **Controls work, but Display won’t connect:** open **Settings → General** on the PC and check **Allow screen mirroring**, then confirm the phone has screen access under **Settings → Devices**. If the view stalls over a VPN, try connecting both devices to the same Wi-Fi network; Display needs a direct UDP connection.
+- **Physical keyboard on phone or tablet:** **Tab** and **Shift+Tab** move focus through the phone UI. To send Tab to the PC, open the on-screen **Keyboard → PC** layout and tap **Tab** (or combine it with **Shift**).
 - **Microphone unavailable:** open **Settings → Keyboard → Dictation setup** on the phone. Export the public certificate from **Phone setup → Encrypted HTTPS & Voice Typing** on the PC, verify its fingerprint, trust it on your phone, and connect using HTTPS. On iPhone, also enable full trust in **Settings → General → About → Certificate Trust Settings**. Never transfer the private key.
 - **Paired devices cannot be loaded:** quit and reopen WinPalm after restoring access to its data folder or using the version that wrote the file. Phone tokens are retained. To intentionally start over, back up the data folder, then use **Devices → Remove all** and pair again.
 - **HTTPS authority changed:** damaged or inconsistent certificate files may require a new local authority. Verify its new fingerprint, trust the new public certificate on each phone and remove the obsolete authority. An ordinary server-certificate renewal keeps the existing authority.
@@ -360,7 +360,7 @@ Install Git, **Bun**, stable Rust with the MSVC toolchain, the .NET SDK selected
 ./scripts/build.ps1 -Architecture x64 -Package
 ./scripts/build.ps1 -Architecture arm64 -Package
 # With NSIS 3.10+ installed, combine both native payloads into one setup:
-bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-0.3.2-Setup.exe
+bun scripts/build-installer.ts --payloads ../winpalm-dev/artifacts/builds --output ../winpalm-dev/artifacts/WinPalm-1.0.0-Setup.exe
 ```
 
 Builds, dependencies, caches and local reports go to `../winpalm-dev/`. The source repository contains the app, tests, packaging and public project documentation. Release assets are distributed through GitHub Releases. Each app package includes its corresponding source and licenses.
@@ -371,9 +371,9 @@ When the launch film changes, regenerate the README animations and poster with *
 
 ## License
 
-Built by **[RS Application](https://rsapplication.com)**. WinPalm adapts CmdPalm 0.7.0's Rust engine and Vue phone client for Windows. See [NOTICE](NOTICE) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licenses.
+Built by **[RS Application](https://rsapplication.com)**. WinPalm shares its Rust engine and Vue phone client lineage with [CmdPalm](https://github.com/rahatsagor/CmdPalm), adapted natively for Windows. See [NOTICE](NOTICE) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licenses.
 
-Licensed under **[AGPL-3.0-only](LICENSE)**. Current development also incorporates CmdPalm 0.8.0's shared Deck, device backup and dictation improvements.
+Licensed under **[AGPL-3.0-only](LICENSE)**.
 
 <div align="center">
 <br />
