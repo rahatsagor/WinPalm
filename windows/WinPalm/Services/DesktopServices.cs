@@ -50,7 +50,7 @@ internal sealed class DesktopServices : IDisposable
     "appIcon" => Apps.Icon(value.GetProperty("id").GetString()!, value.GetProperty("size").GetInt32()),
     "appAction" => Apps.Action(value.GetProperty("id").GetString()!, value.GetProperty("op").GetString()!,
         () => !CoreBridge.Call(new { op = "actionAllowed", id = value.GetProperty("session").GetUInt64() }).GetBoolean()),
-    "openUrl" => Open(value.GetString()!),
+    "openUrl" => OpenPhoneUrl(value.GetString()!),
     "native" => Native(value.GetString()!),
     "automationCommand" => preferences.Automations.TryGetValue(value.GetString()!, out var command) ? command : null,
     "platformMedia" => value.GetString() switch { "brightnessUp" => Brightness.Step(true), "brightnessDown" => Brightness.Step(false), "fastForward" => MediaCommand(49), "rewind" => MediaCommand(50), _ => false },
@@ -81,6 +81,7 @@ internal sealed class DesktopServices : IDisposable
   }
   private object? WriteClipboard(string text) { clipboard.Write(text); return null; }
   private object? EndPaste() { clipboard.End(); return null; }
+  private bool OpenPhoneUrl(string url) => LinkPolicy.IsAllowed(url, Volatile.Read(ref preferences).AllowShell) && Open(url.Trim());
   internal static bool Open(string url)
   {
     try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); return true; }

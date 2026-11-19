@@ -10,10 +10,11 @@ internal sealed class ApprovalWindow : Form
   private readonly string address;
   private bool answered;
   private readonly bool screenRequest;
+  private readonly bool remembered;
   private readonly Action<ulong, bool>? response;
   private string Prompt => screenRequest ? $"Allow \"{deviceName}\" to view this PC's screen?" : $"Allow \"{deviceName}\" to control this PC?";
   private string Detail => screenRequest
-      ? $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} could see anything shown on a selected monitor. Only allow devices you trust. This request expires after one minute."
+      ? $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address}. Only approve a device you recognize. {(remembered ? "This paired device stays allowed until you revoke access in Devices." : "Access lasts for this connection only.")} This request expires after one minute."
       : $"{(string.IsNullOrWhiteSpace(model) ? "Device" : model)} at {address} is requesting access. Only allow devices you recognize.";
 
   protected override bool ShowWithoutActivation => true;
@@ -35,11 +36,13 @@ internal sealed class ApprovalWindow : Form
     deviceName = request.GetProperty("deviceName").GetString() ?? "New device";
     model = request.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
     address = request.GetProperty("address").GetString() ?? "";
+    remembered = request.TryGetProperty("remembered", out var rem) && rem.ValueKind == JsonValueKind.True;
 
     Text = screenRequest ? "WinPalm · Screen mirroring request" : "WinPalm · Pairing request";
     FormBorderStyle = FormBorderStyle.None;
     ShowInTaskbar = false;
     TopMost = true;
+    KeyPreview = true;
     AutoScaleMode = AutoScaleMode.None;
     BackColor = Theme.Surface;
     ForeColor = Theme.Text;
@@ -70,10 +73,11 @@ internal sealed class ApprovalWindow : Form
     ClientSize = new Size(width, btnY + allow.Height + pad);
     StartPosition = FormStartPosition.Manual;
     var area = (Screen.PrimaryScreen ?? Screen.AllScreens.FirstOrDefault())?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
-    var offset = Math.Min(stackIndex, 4) * Theme.Px(18);
-    Location = new Point(area.Right - Width - Theme.Px(20) - offset, Math.Max(area.Top + Theme.Px(20), area.Bottom - Height - Theme.Px(20) - offset));
+    var (x, y) = LayoutMath.ClampOverlayOrigin(area.Left, area.Top, area.Right, area.Bottom, Width, Height, Theme.Px(20), stackIndex, Theme.Px(18));
+    Location = new Point(x, y);
 
     HandleCreated += (_, _) => Theme.ApplyWindowChrome(this, Theme.Surface, roundCorners: true);
+    KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { e.Handled = true; Answer(false); } };
     MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) Win32.DragWindow(Handle); };
     FormClosing += (_, _) => { if (!answered) Answer(false); };
   }
@@ -96,7 +100,7 @@ internal sealed class ApprovalWindow : Form
     var textW = Width - textX - pad;
     var y = pad;
 
-    Theme.DrawText(g, screenRequest ? "SCREEN VIEWING REQUEST" : "PAIRING REQUEST", Theme.Font(7.75f, true), new Rectangle(textX, y, textW, Theme.Px(16)), Theme.Accent, TextFormatFlags.Left | TextFormatFlags.SingleLine);
+    Theme.DrawText(g, screenRequest ? "SCREEN MIRRORING REQUEST" : "PAIRING REQUEST", Theme.Font(7.75f, true), new Rectangle(textX, y, textW, Theme.Px(16)), Theme.Accent, TextFormatFlags.Left | TextFormatFlags.SingleLine);
     y += Theme.Px(18);
 
     var prompt = Prompt;

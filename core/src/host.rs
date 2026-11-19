@@ -373,6 +373,23 @@ pub(crate) fn windows_adapter_rank(name: &str, description: &str, if_type: u32, 
     (rank, vpn)
 }
 
+#[cfg(not(windows))]
+fn interface_rank(name: &str) -> (u8, bool) {
+    let lower = name.to_ascii_lowercase();
+    let vpn = VPN_INTERFACES.iter().any(|prefix| name.starts_with(prefix))
+        || VPN_WORDS.iter().any(|word| lower.contains(word));
+    let rank = if name.starts_with("en") {
+        0
+    } else if vpn || name.starts_with("bridge") || name.starts_with("awdl") || name.starts_with("llw") {
+        // VPNs, Internet Sharing and AirDrop interfaces are rarely what
+        // a phone on the same Wi-Fi can reach.
+        2
+    } else {
+        1
+    };
+    (rank, vpn)
+}
+
 /// Addresses a phone might reach, Wi-Fi and Ethernet first, each marked
 /// with whether it belongs to a VPN.
 #[cfg(not(windows))]
@@ -388,19 +405,7 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
             if v4.is_link_local() || v4.is_unspecified() {
                 return None;
             }
-            let name = iface.name.as_str();
-            let lower = name.to_ascii_lowercase();
-            let vpn = VPN_INTERFACES.iter().any(|prefix| name.starts_with(prefix))
-                || VPN_WORDS.iter().any(|word| lower.contains(word));
-            let rank = if name.starts_with("en") {
-                0
-            } else if vpn || name.starts_with("bridge") || name.starts_with("awdl") || name.starts_with("llw") {
-                // VPNs, Internet Sharing and AirDrop interfaces are rarely what
-                // a phone on the same Wi-Fi can reach.
-                2
-            } else {
-                1
-            };
+            let (rank, vpn) = interface_rank(&iface.name);
             Some((rank, IpAddr::V4(v4), vpn))
         })
         .collect();
@@ -414,11 +419,11 @@ fn network_addresses() -> Vec<(IpAddr, bool)> {
 /// belongs to a VPN.
 #[cfg(windows)]
 fn network_addresses() -> Vec<(IpAddr, bool)> {
-    network_adapters(false)
+    network_adapters(false).into_iter().map(|(_, _, ip, vpn)| (ip, vpn)).collect()
 }
 
 #[cfg(windows)]
-fn network_adapters(include_ipv6: bool) -> Vec<(IpAddr, bool)> {
+fn network_adapters(include_ipv6: bool) -> Vec<(u8, u32, IpAddr, bool)> {
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
     use windows_sys::Win32::NetworkManagement::IpHelper::*;
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
@@ -508,7 +513,7 @@ fn network_adapters(include_ipv6: bool) -> Vec<(IpAddr, bool)> {
     }
     found.sort();
     let mut seen = std::collections::HashSet::new();
-    found.into_iter().filter(|(_, _, ip, _)| seen.insert(*ip)).map(|(_, _, ip, vpn)| (ip, vpn)).collect()
+    found.into_iter().filter(|(_, _, ip, _)| seen.insert(*ip)).collect()
 }
 
 /// LAN addresses a phone can reach, Wi-Fi and Ethernet first.
@@ -516,16 +521,24 @@ pub fn lan_addresses() -> Vec<IpAddr> {
     network_addresses().into_iter().map(|(ip, _)| ip).collect()
 }
 
-/// Media ICE candidates also include usable IPv6 and VPN interfaces. Pairing
-/// keeps its existing IPv4 address preference and URL representation.
-pub(crate) fn media_addresses() -> Vec<IpAddr> {
+/// Ranked media ICE candidates `(tier, metric, ip)`, including usable IPv6 and
+/// VPN interfaces while keeping physical LAN adapters ahead of virtual/VPN paths.
+/// Pairing keeps its existing IPv4 address preference and URL representation.
+pub(crate) fn media_addresses() -> Vec<(u8, u32, IpAddr)> {
     #[cfg(windows)]
     {
-        network_adapters(true).into_iter().map(|(ip, _)| ip).collect()
+        network_adapters(true).into_iter().map(|(rank, metric, ip, _)| (rank, metric, ip)).collect()
     }
     #[cfg(not(windows))]
     {
-        if_addrs::get_if_addrs().unwrap_or_default().into_iter().map(|interface| interface.ip()).collect()
+        if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|interface| {
+                let (rank, _) = interface_rank(&interface.name);
+                (rank, 0, interface.ip())
+            })
+            .collect()
     }
 }
 

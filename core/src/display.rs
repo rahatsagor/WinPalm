@@ -663,20 +663,40 @@ struct Datagram {
     bytes: Vec<u8>,
 }
 
+fn rank_endpoint(tier: u8, metric: u32, ip: IpAddr) -> Option<(u8, u32, bool, IpAddr)> {
+    if ip.is_unspecified() || ip.is_multicast() {
+        return None;
+    }
+    match ip {
+        IpAddr::V4(v4) if v4.is_link_local() => return None,
+        IpAddr::V6(v6) if v6.is_unicast_link_local() => return None,
+        _ => {}
+    }
+    let (tier, metric) = if ip.is_loopback() { (u8::MAX, 0) } else { (tier, metric) };
+    Some((tier, metric, ip.is_ipv6(), ip))
+}
+
 async fn endpoints(loopback_only: bool) -> Result<Vec<Endpoint>, String> {
-    let mut addresses: Vec<IpAddr> = if loopback_only { vec![] } else { crate::host::media_addresses() }
-        .into_iter()
-        .filter(|ip| !ip.is_unspecified() && !ip.is_multicast())
-        .filter(|ip| match ip {
-            IpAddr::V6(v6) => !v6.is_unicast_link_local(),
-            IpAddr::V4(_) => true,
-        })
-        .collect();
-    addresses.extend([IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)]);
-    addresses.sort_by_key(|ip| (ip.is_loopback(), ip.is_ipv6(), *ip));
-    addresses.dedup();
+    let mut ranked: Vec<((u8, u32, bool, IpAddr), IpAddr)> =
+        if loopback_only { vec![] } else { crate::host::media_addresses() }
+            .into_iter()
+            .filter_map(|(tier, metric, ip)| rank_endpoint(tier, metric, ip).map(|key| (key, ip)))
+            .collect();
+    for ip in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
+        if let Some(key) = rank_endpoint(u8::MAX, 0, ip) {
+            ranked.push((key, ip));
+        }
+    }
+    ranked.sort_by_key(|(key, _)| *key);
+    let mut seen = HashSet::new();
     let mut endpoints = Vec::new();
-    for ip in addresses.into_iter().take(32) {
+    for (_, ip) in ranked {
+        if !seen.insert(ip) {
+            continue;
+        }
+        if seen.len() > 32 {
+            break;
+        }
         if let Ok(socket) = UdpSocket::bind(SocketAddr::new(ip, 0)).await {
             let address = socket.local_addr().map_err(|e| e.to_string())?;
             endpoints.push(Endpoint { address, socket: Arc::new(socket) });
@@ -718,9 +738,33 @@ async fn run(
         let incoming = incoming.clone();
         readers.spawn(async move {
             let mut buffer = [0; 2048];
-            while let Ok((size, source)) = socket.recv_from(&mut buffer).await {
-                if incoming.send(Datagram { source, destination, bytes: buffer[..size].to_vec() }).await.is_err() {
-                    break;
+            loop {
+                match socket.recv_from(&mut buffer).await {
+                    Ok((size, source)) => {
+                        if incoming
+                            .send(Datagram { source, destination, bytes: buffer[..size].to_vec() })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // Transient ICMP/socket errors (such as WSAECONNRESET /
+                    // ConnectionReset or ConnectionRefused from an unreachable
+                    // candidate) must not end the reader for this socket.
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::Interrupted
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
                 }
             }
         });
@@ -1013,5 +1057,30 @@ mod tests {
         assert_eq!(capture_limits(DisplayQuality::Original, 31), (3840, 1, 0));
         assert_eq!(receiver_level("a=fmtp:108 packetization-mode=1; profile-level-id=42e020\r\n", 108), 32);
         assert_eq!(receiver_level("a=fmtp:109 profile-level-id=42e02a\r\n", 108), 31);
+    }
+
+    #[test]
+    fn endpoint_ranking_excludes_link_local_and_prefers_lan() {
+        assert_eq!(rank_endpoint(0, 10, IpAddr::V4(Ipv4Addr::new(169, 254, 1, 2))), None);
+        assert_eq!(rank_endpoint(0, 10, "fe80::1".parse().unwrap()), None);
+        assert_eq!(rank_endpoint(0, 10, IpAddr::V4(Ipv4Addr::UNSPECIFIED)), None);
+        assert_eq!(rank_endpoint(0, 10, IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1))), None);
+
+        let (lan_rank, _) = crate::host::windows_adapter_rank("Wi-Fi", "Intel Wi-Fi 6", 71, true);
+        let (virt_rank, _) = crate::host::windows_adapter_rank("vEthernet (WSL)", "Hyper-V Virtual Ethernet", 6, false);
+        let (vpn_rank, _) = crate::host::windows_adapter_rank("Tailscale", "Tailscale Tunnel", 53, false);
+
+        let lan4 = rank_endpoint(lan_rank, 25, "192.168.1.10".parse().unwrap()).unwrap();
+        let lan6 = rank_endpoint(lan_rank, 25, "fd00::1".parse().unwrap()).unwrap();
+        let virt = rank_endpoint(virt_rank, 15, "172.20.0.1".parse().unwrap()).unwrap();
+        let vpn = rank_endpoint(vpn_rank, 5, "100.80.1.2".parse().unwrap()).unwrap();
+        let lo4 = rank_endpoint(0, 0, IpAddr::V4(Ipv4Addr::LOCALHOST)).unwrap();
+        let lo6 = rank_endpoint(0, 0, IpAddr::V6(Ipv6Addr::LOCALHOST)).unwrap();
+
+        assert!(lan4 < lan6);
+        assert!(lan6 < virt);
+        assert!(virt < vpn);
+        assert!(vpn < lo4);
+        assert!(lo4 < lo6);
     }
 }
