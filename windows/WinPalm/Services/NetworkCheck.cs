@@ -8,22 +8,27 @@ namespace WinPalm.Services;
 internal static class NetworkCheck
 {
   internal sealed record Problem(string Message, string ButtonText, string Target);
-  private const int Public = 0, Private = 1, Domain = 2;
-  internal static Problem? Find()
+  internal const int Public = 0, Private = 1, Domain = 2;
+  internal static Problem? Find() => Find(ConnectedNetworks(), BlockedProfiles);
+  internal static Problem? Find(IReadOnlyList<(string Name, int Category)> connected, Func<HashSet<int>, List<string>> blockedProfiles)
   {
-    var connected = ConnectedNetworks();
     if (connected.Count == 0) return null;
     var publicNames = connected.Where(n => n.Category == Public).Select(n => n.Name).ToArray();
-    var blocked = BlockedProfiles(connected.Select(n => n.Category).ToHashSet());
+    var blocked = blockedProfiles(connected.Select(n => n.Category).ToHashSet());
     if (blocked.Count > 0)
       return new($"Windows Firewall is blocking WinPalm on {string.Join(" and ", blocked)} networks, so phones can't connect. Allow WinPalm on Private networks in the firewall's app list.", "Allow WinPalm in Windows Firewall", "firewall");
     if (publicNames.Length > 0 && publicNames.Length == connected.Count)
       return new($"Windows treats “{publicNames[0]}” as a public network and blocks phones from reaching this PC. If it's your home or work network, set its network profile type to Private.", "Open network settings", "ms-settings:network-status");
     return null;
   }
+  internal static (string Name, int Category)? ReadNetwork(INetwork network) =>
+    network.GetName(out var name) >= 0 && network.GetCategory(out var category) >= 0
+      ? (name ?? "this network", category)
+      : null;
   private static List<(string Name, int Category)> ConnectedNetworks()
   {
     var result = new List<(string, int)>();
+    if (!OperatingSystem.IsWindows()) return result;
     object? manager = null; IEnumNetworks? networks = null;
     try
     {
@@ -32,7 +37,7 @@ internal static class NetworkCheck
       for (var i = 0; i < 16 && networks.Next(1, out var network, out var fetched) == 0 && fetched == 1; i++)
         try
         {
-          if (network.GetName(out var name) >= 0 && network.GetCategory(out var category) >= 0) result.Add((name ?? "this network", category));
+          if (ReadNetwork(network) is { } item) result.Add(item);
         }
         finally { Marshal.FinalReleaseComObject(network); }
     }
@@ -50,6 +55,7 @@ internal static class NetworkCheck
   private static List<string> BlockedProfiles(HashSet<int> categories)
   {
     var blocked = new List<string>();
+    if (!OperatingSystem.IsWindows()) return blocked;
     var executable = Environment.ProcessPath;
     if (executable is null) return blocked;
     try
@@ -90,7 +96,7 @@ internal static class NetworkCheck
     [PreserveSig] int Next(uint count, out INetwork network, out uint fetched);
   }
   [ComImport, Guid("DCB00002-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
-  private interface INetwork
+  internal interface INetwork
   {
     [PreserveSig] int GetName([MarshalAs(UnmanagedType.BStr)] out string? name);
     [PreserveSig] int SetName([MarshalAs(UnmanagedType.BStr)] string name);
@@ -102,6 +108,8 @@ internal static class NetworkCheck
     [PreserveSig] int GetTimeCreatedAndConnected(out uint createdLow, out uint createdHigh, out uint connectedLow, out uint connectedHigh);
     [PreserveSig] int IsConnectedToInternet(out short connected);
     [PreserveSig] int IsConnected(out short connected);
+    [PreserveSig] int GetConnectivity(out int connectivity);
     [PreserveSig] int GetCategory(out int category);
+    [PreserveSig] int SetCategory(int category);
   }
 }

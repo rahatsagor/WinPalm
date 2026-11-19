@@ -31,13 +31,16 @@ internal sealed class Preferences
   public static Preferences Load()
   {
     Directory.CreateDirectory(DataDirectory);
-    // Inherit no broad ACL: pairing hashes and the local CA key are private.
-    var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No Windows user identity");
-    var acl = new DirectorySecurity();
-    acl.SetAccessRuleProtection(true, false);
-    foreach (var sid in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) })
-      acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-    new DirectoryInfo(DataDirectory).SetAccessControl(acl);
+    if (OperatingSystem.IsWindows())
+    {
+      // Inherit no broad ACL: pairing hashes and the local CA key are private.
+      var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No Windows user identity");
+      var acl = new DirectorySecurity();
+      acl.SetAccessRuleProtection(true, false);
+      foreach (var sid in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) })
+        acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+      new DirectoryInfo(DataDirectory).SetAccessControl(acl);
+    }
     var file = Path.Combine(DataDirectory, "preferences.json");
     try { return JsonSerializer.Deserialize<Preferences>(File.ReadAllText(file), Json) ?? new(); }
     catch (FileNotFoundException) { return new(); }
@@ -67,9 +70,15 @@ internal sealed class Preferences
           : null;
   public static bool StartsAtLogin
   {
-    get { using var key = Registry.CurrentUser.OpenSubKey(RunKey); return key?.GetValue("WinPalm") is string; }
+    get
+    {
+      if (!OperatingSystem.IsWindows()) return false;
+      using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+      return key?.GetValue("WinPalm") is string;
+    }
     set
     {
+      if (!OperatingSystem.IsWindows()) return;
       if (value && LocationProblem(Environment.ProcessPath) is { } problem) throw new InvalidOperationException(problem);
       using var key = Registry.CurrentUser.CreateSubKey(RunKey);
       if (value) key.SetValue("WinPalm", LoginCommand);
@@ -79,6 +88,7 @@ internal sealed class Preferences
   /// After the WinPalm folder moves, sign-in should start this copy.
   internal static void KeepLoginPathCurrent()
   {
+    if (!OperatingSystem.IsWindows()) return;
     try
     {
       using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
@@ -90,6 +100,7 @@ internal sealed class Preferences
   /// version Windows displays in Installed apps in sync with that copy.
   internal static void KeepInstalledVersionCurrent()
   {
+    if (!OperatingSystem.IsWindows()) return;
     try
     {
       using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\WinPalm", true);

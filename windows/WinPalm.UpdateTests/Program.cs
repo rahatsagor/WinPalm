@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -6,6 +7,12 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using WinPalm.Services;
 using WinPalm.UI;
+
+if (args is ["--test-child-fail"])
+{
+  Environment.ExitCode = 1;
+  return;
+}
 
 if (args is ["--package", var archive, var architecture, var version])
 {
@@ -87,6 +94,12 @@ sealed class Tests
       Sync("cancelled app activation stops waiting and cannot succeed", ActivationCancellation);
       Sync("row header reserves status pill width before wrapping title", HeaderReservesPillWidth);
       Sync("narrow row header stacks wide status pill below title without overflow", NarrowHeaderStacksPill);
+      Sync("INetwork COM vtable places GetConnectivity before GetCategory", NetworkInterfaceVtableMatchesWindowsSdk);
+      Sync("NetworkCheck reads GetCategory instead of GetConnectivity", NetworkCategoryReadsGetCategoryNotConnectivity);
+      Sync("NetworkCheck classifies Public Private Domain and firewall blocks", NetworkProfileDetectionCategories);
+      await Async("UpdateController catches InvalidDataException and cleans staging", ControllerReportsInvalidDataAndCleansStaging);
+      Sync("UpdateInstaller RunStartup skips modal dialog during --complete-update", CompleteUpdateStartupNeverShowsBlockingModal);
+      Sync("UpdateInstaller rolls back when --complete-update exits without success", CompleteUpdateFailureRollsBackAndRestartsPrevious);
     }
     finally { try { Directory.Delete(root, true); } catch { } }
     Console.WriteLine($"{passed} passed, {failed} failed");
@@ -629,11 +642,11 @@ sealed class Tests
     return ReleaseUpdates.Parse(doc.RootElement, current ?? new Version(1, 0, 0), architecture);
   }
 
-  private static string ReleaseJson(string tag, string architecture, bool draft = false, bool prerelease = false, bool omitPackage = false, string? packageUrl = null)
+  private static string ReleaseJson(string tag, string architecture, bool draft = false, bool prerelease = false, bool omitPackage = false, string? packageUrl = null, long packageSize = 10)
   {
     var version = tag.TrimStart('v'); var package = $"WinPalm-{version}-win-{architecture}.zip";
     var assets = new List<object>();
-    if (!omitPackage) assets.Add(new { name = package, size = 10, browser_download_url = packageUrl ?? AssetUri(tag, package) });
+    if (!omitPackage) assets.Add(new { name = package, size = packageSize, browser_download_url = packageUrl ?? AssetUri(tag, package) });
     assets.Add(new { name = package + ".sha256", size = 100, browser_download_url = AssetUri(tag, package + ".sha256") });
     return JsonSerializer.Serialize(new { draft, prerelease, tag_name = tag, body = "notes", assets });
   }
@@ -672,6 +685,224 @@ sealed class Tests
     True(stacked.PillBelowTitle);
     Equal(160, stacked.TitleMaxWidth);
     Equal(42, stacked.HeaderHeight);
+  }
+
+  private void NetworkInterfaceVtableMatchesWindowsSdk()
+  {
+    var methods = typeof(NetworkCheck.INetwork).GetMethods().Select(m => m.Name).ToArray();
+    string[] expected =
+    [
+      "GetName", "SetName", "GetDescription", "SetDescription", "GetNetworkId",
+      "GetDomainType", "GetNetworkConnections", "GetTimeCreatedAndConnected",
+      "IsConnectedToInternet", "IsConnected", "GetConnectivity", "GetCategory", "SetCategory"
+    ];
+    Equal(expected.Length, methods.Length);
+    for (var i = 0; i < expected.Length; i++) Equal(expected[i], methods[i]);
+    Equal("GetConnectivity", methods[10]);
+    Equal("GetCategory", methods[11]);
+  }
+
+  private void NetworkCategoryReadsGetCategoryNotConnectivity()
+  {
+    var priv = NetworkCheck.ReadNetwork(new FakeNetwork("Home Wi-Fi", connectivity: 0x40, category: NetworkCheck.Private));
+    True(priv is { Name: "Home Wi-Fi", Category: NetworkCheck.Private });
+    var pub = NetworkCheck.ReadNetwork(new FakeNetwork("Cafe Wi-Fi", connectivity: 0x40, category: NetworkCheck.Public));
+    True(pub is { Name: "Cafe Wi-Fi", Category: NetworkCheck.Public });
+    True(NetworkCheck.ReadNetwork(new FakeNetwork("Broken", 0x40, NetworkCheck.Private, categoryHr: unchecked((int)0x80004005))) is null);
+  }
+
+  private void NetworkProfileDetectionCategories()
+  {
+    var pub = NetworkCheck.Find([("Cafe Wi-Fi", NetworkCheck.Public)], _ => []);
+    True(pub is not null && pub.Target == "ms-settings:network-status" && pub.Message.Contains("Cafe Wi-Fi"));
+    True(NetworkCheck.Find([("Home Wi-Fi", NetworkCheck.Private)], _ => []) is null);
+    True(NetworkCheck.Find([("Corp Domain", NetworkCheck.Domain)], _ => []) is null);
+    True(NetworkCheck.Find([("Cafe Wi-Fi", NetworkCheck.Public), ("Home Wi-Fi", NetworkCheck.Private)], _ => []) is null);
+    var blocked = NetworkCheck.Find([("Home Wi-Fi", NetworkCheck.Private)], _ => ["Private"]);
+    True(blocked is not null && blocked.Target == "firewall" && blocked.Message.Contains("Private"));
+    True(NetworkCheck.Find([], _ => ["Private"]) is null);
+  }
+
+  private async Task ControllerReportsInvalidDataAndCleansStaging()
+  {
+    var previousDataDir = Preferences.DataDirectory;
+    var testDataDir = Path.Combine(root, "controller-data");
+    Directory.CreateDirectory(testDataDir);
+    Preferences.UseTestDirectory(testDataDir);
+    try
+    {
+      var arch = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
+      var badZipBytes = MakeIncompleteZipBytes();
+      var releaseJson = ReleaseJson("v9.9.9", arch, packageSize: badZipBytes.Length);
+
+      var badChecksumHandler = new FakeHandler((request, _) =>
+      {
+        var uri = request.RequestUri!.AbsoluteUri;
+        if (uri.EndsWith("/releases/latest", StringComparison.Ordinal))
+          return new(HttpStatusCode.OK) { Content = new StringContent(releaseJson) };
+        if (uri.EndsWith(".sha256", StringComparison.Ordinal))
+          return new(HttpStatusCode.OK) { Content = new StringContent(new string('0', 64) + $"  WinPalm-9.9.9-win-{arch}.zip") };
+        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(badZipBytes) };
+      });
+      using (var updates = new ReleaseUpdates(badChecksumHandler))
+      using (var controller = new UpdateController(new Preferences(), updates))
+      {
+        var restarted = false;
+        controller.RestartRequested += () => restarted = true;
+        await controller.CheckAsync();
+        True(controller.Available is not null);
+        await controller.InstallAsync();
+        False(controller.Installing);
+        False(controller.Busy);
+        False(restarted);
+        True(controller.Available is not null);
+        True(controller.Message.StartsWith("Couldn’t install the update.", StringComparison.Ordinal), controller.Message);
+        True(controller.Message.Contains("checksum", StringComparison.OrdinalIgnoreCase), controller.Message);
+        Equal(0, Directory.GetDirectories(UpdateInstaller.StagingRoot).Length);
+      }
+
+      var validChecksumForBadZip = Convert.ToHexString(SHA256.HashData(badZipBytes)) + $"  WinPalm-9.9.9-win-{arch}.zip";
+      var badArchiveHandler = new FakeHandler((request, _) =>
+      {
+        var uri = request.RequestUri!.AbsoluteUri;
+        if (uri.EndsWith("/releases/latest", StringComparison.Ordinal))
+          return new(HttpStatusCode.OK) { Content = new StringContent(releaseJson) };
+        if (uri.EndsWith(".sha256", StringComparison.Ordinal))
+          return new(HttpStatusCode.OK) { Content = new StringContent(validChecksumForBadZip) };
+        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(badZipBytes) };
+      });
+      using (var updates = new ReleaseUpdates(badArchiveHandler))
+      using (var controller = new UpdateController(
+        new Preferences(),
+        updates,
+        (archive, stage, _, _, token) => UpdatePackage.Extract(archive, Path.Combine(stage, "payload"), token)))
+      {
+        var restarted = false;
+        controller.RestartRequested += () => restarted = true;
+        await controller.CheckAsync();
+        await controller.InstallAsync();
+        False(controller.Installing);
+        False(restarted);
+        True(controller.Message.StartsWith("Couldn’t install the update.", StringComparison.Ordinal), controller.Message);
+        True(controller.Message.Contains("incomplete", StringComparison.OrdinalIgnoreCase), controller.Message);
+        Equal(0, Directory.GetDirectories(UpdateInstaller.StagingRoot).Length);
+      }
+    }
+    finally { Preferences.UseTestDirectory(previousDataDir); }
+  }
+
+  private byte[] MakeIncompleteZipBytes()
+  {
+    using var memory = new MemoryStream();
+    using (var zip = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
+    {
+      var entry = zip.CreateEntry("WinPalm.exe", CompressionLevel.NoCompression);
+      using var writer = new StreamWriter(entry.Open());
+      writer.Write("not-complete");
+    }
+    return memory.ToArray();
+  }
+
+  private void CompleteUpdateStartupNeverShowsBlockingModal()
+  {
+    var recorded = 0;
+    var modalShown = false;
+    Throws<InvalidOperationException>(() => UpdateInstaller.RunStartup(
+      () => throw new InvalidOperationException("port unavailable"),
+      _ => recorded++,
+      _ => modalShown = true,
+      completingUpdate: true));
+    Equal(1, recorded);
+    False(modalShown);
+
+    recorded = 0;
+    UpdateInstaller.RunStartup(
+      () => throw new InvalidOperationException("port unavailable"),
+      _ => recorded++,
+      _ => modalShown = true,
+      completingUpdate: false);
+    Equal(1, recorded);
+    True(modalShown);
+  }
+
+  private void CompleteUpdateFailureRollsBackAndRestartsPrevious()
+  {
+    var (target, payload, _) = InstallFixture("verify-rollback");
+    var id = Guid.NewGuid().ToString("N");
+    var stage = Path.Combine(root, "verify-stage-" + id);
+    Directory.CreateDirectory(stage);
+    var restoredCalls = 0;
+
+    Throws<IOException>(() => UpdateInstaller.InstallAndVerify(
+      id,
+      stage,
+      payload,
+      target,
+      StartFailingChildProcess,
+      () => restoredCalls++,
+      maxPolls: 200,
+      pollIntervalMs: 10));
+
+    Equal(1, restoredCalls);
+    Equal("old app", File.ReadAllText(Path.Combine(target, "WinPalm.exe")));
+    Equal("old web", File.ReadAllText(Path.Combine(target, "web", "index.html")));
+    Equal("old stale", File.ReadAllText(Path.Combine(target, "web", "old.js")));
+    False(Directory.Exists(Path.Combine(target, ".winpalm-backup-" + id)));
+    False(File.Exists(Path.Combine(stage, "finished")));
+
+    var idSuccess = Guid.NewGuid().ToString("N");
+    var stageSuccess = Path.Combine(root, "verify-stage-" + idSuccess);
+    Directory.CreateDirectory(stageSuccess);
+    var restoredOnSuccess = 0;
+    var code = UpdateInstaller.InstallAndVerify(
+      idSuccess,
+      stageSuccess,
+      payload,
+      target,
+      () =>
+      {
+        var proc = StartFailingChildProcess();
+        File.WriteAllText(Path.Combine(stageSuccess, "success"), "success");
+        return proc;
+      },
+      () => restoredOnSuccess++,
+      maxPolls: 200,
+      pollIntervalMs: 10);
+
+    Equal(0, code);
+    Equal(0, restoredOnSuccess);
+    Equal("new app", File.ReadAllText(Path.Combine(target, "WinPalm.exe")));
+    Equal("new web", File.ReadAllText(Path.Combine(target, "web", "index.html")));
+    False(File.Exists(Path.Combine(target, "web", "old.js")));
+    False(Directory.Exists(Path.Combine(target, ".winpalm-backup-" + idSuccess)));
+    True(File.Exists(Path.Combine(stageSuccess, "finished")));
+  }
+
+  private static Process? StartFailingChildProcess()
+  {
+    var host = Environment.ProcessPath ?? throw new InvalidOperationException("ProcessPath unavailable");
+    var info = new ProcessStartInfo(host) { UseShellExecute = false };
+    if (Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+      info.ArgumentList.Add(typeof(Tests).Assembly.Location);
+    info.ArgumentList.Add("--test-child-fail");
+    return Process.Start(info);
+  }
+
+  private sealed class FakeNetwork(string name, int connectivity, int category, int categoryHr = 0) : NetworkCheck.INetwork
+  {
+    public int GetName(out string? n) { n = name; return 0; }
+    public int SetName(string n) => 0;
+    public int GetDescription(out string? d) { d = ""; return 0; }
+    public int SetDescription(string d) => 0;
+    public int GetNetworkId(out Guid id) { id = Guid.Empty; return 0; }
+    public int GetDomainType(out int type) { type = 0; return 0; }
+    public int GetNetworkConnections(out nint connections) { connections = 0; return 0; }
+    public int GetTimeCreatedAndConnected(out uint cl, out uint ch, out uint dl, out uint dh) { cl = ch = dl = dh = 0; return 0; }
+    public int IsConnectedToInternet(out short connected) { connected = -1; return 0; }
+    public int IsConnected(out short connected) { connected = -1; return 0; }
+    public int GetConnectivity(out int c) { c = connectivity; return 0; }
+    public int GetCategory(out int c) { c = category; return categoryHr; }
+    public int SetCategory(int c) => 0;
   }
 
   private static string AssetUri(string tag, string name) => $"https://github.com/{ReleaseUpdates.Repository}/releases/download/{tag}/{name}";

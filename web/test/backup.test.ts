@@ -80,6 +80,51 @@ describe('device backups', () => {
     expect(backup.restoreBackup(backup.readBackup(JSON.stringify(raw)))).toBe(true)
     expect(prefs.settings.sidewaysTurn).toBe('right')
   })
+
+  it('migrates legacy keyboard and scrollRail settings instead of rejecting them', () => {
+    prefs.settings.keyboard = 'auto'
+    prefs.settings.scrollStrip = 'long'
+    prefs.settings.scrollStripSide = 'right'
+    const base = JSON.parse(backup.exportBackup())
+    base.setup.settings.keyboard = 'mac'
+    delete base.setup.settings.scrollStrip
+    delete base.setup.settings.scrollStripSide
+    base.setup.settings.scrollRail = 'left'
+
+    expect(backup.restoreBackup(backup.readBackup(JSON.stringify(base)))).toBe(true)
+    expect(prefs.settings.keyboard).toBe('pc')
+    expect(prefs.settings.scrollStrip).toBe('short')
+    expect(prefs.settings.scrollStripSide).toBe('left')
+
+    base.setup.settings.scrollRail = 'off'
+    expect(backup.restoreBackup(backup.readBackup(JSON.stringify(base)))).toBe(true)
+    expect(prefs.settings.scrollStrip).toBe('off')
+    expect(prefs.settings.scrollStripSide).toBe('right')
+
+    base.setup.settings.scrollRail = 'right'
+    expect(backup.restoreBackup(backup.readBackup(JSON.stringify(base)))).toBe(true)
+    expect(prefs.settings.scrollStrip).toBe('short')
+    expect(prefs.settings.scrollStripSide).toBe('right')
+
+    base.setup.settings.scrollStrip = 'long'
+    base.setup.settings.scrollStripSide = 'left'
+    base.setup.settings.scrollRail = 'off'
+    expect(backup.restoreBackup(backup.readBackup(JSON.stringify(base)))).toBe(true)
+    expect(prefs.settings.scrollStrip).toBe('long')
+    expect(prefs.settings.scrollStripSide).toBe('left')
+  })
+
+  it.each([
+    { keyboard: 'dvorak' },
+    { scrollRail: 'diagonal' },
+    { scrollRail: 'left', scrollStrip: 'huge' },
+  ])('still rejects malformed setting %j without changing the current setup', (badFields) => {
+    const before = backup.exportBackup(123)
+    const raw = JSON.parse(before)
+    Object.assign(raw.setup.settings, badFields)
+    expect(() => backup.readBackup(JSON.stringify(raw))).toThrow()
+    expect(backup.exportBackup(123)).toBe(before)
+  })
 })
 
 describe('strict keyboard backup validation', () => {

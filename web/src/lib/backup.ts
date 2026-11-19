@@ -42,11 +42,22 @@ export function readBackup(json: string): DeviceBackup {
     seen.add(board.id)
     return board
   })
-  const incoming = migrate(raw.setup.settings)
+  const rawSettings: Record<string, unknown> = { ...raw.setup.settings }
+  if (rawSettings.keyboard === 'mac') rawSettings.keyboard = 'pc'
+  if (Object.hasOwn(rawSettings, 'scrollRail')) {
+    const rail = rawSettings.scrollRail
+    if (rail !== 'right' && rail !== 'left' && rail !== 'off') {
+      throw new Error('This backup contains an invalid setting. Your current setup hasn’t changed.')
+    }
+    if (!Object.hasOwn(rawSettings, 'scrollStrip')) rawSettings.scrollStrip = rail === 'off' ? 'off' : 'short'
+    if (!Object.hasOwn(rawSettings, 'scrollStripSide')) rawSettings.scrollStripSide = rail === 'left' ? 'left' : 'right'
+    delete rawSettings.scrollRail
+  }
+  const incoming = migrate(rawSettings)
   const prefs = buildPayload().settings
   for (const key of Object.keys(prefs) as (keyof typeof prefs)[]) {
-    if (!Object.hasOwn(raw.setup.settings, key)) continue
-    const value = raw.setup.settings[key]
+    if (!Object.hasOwn(rawSettings, key)) continue
+    const value = rawSettings[key]
     if (!equalJson(value, incoming[key])) throw new Error('This backup contains an invalid setting. Your current setup hasn’t changed.')
     if (key === 'threeFinger' || key === 'fourFinger') {
       for (const action of Object.values(value as GestureMap)) {
