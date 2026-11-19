@@ -8,13 +8,20 @@ internal static class AudioVolume
     try { return WithEndpoint(endpoint => { Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out var value)); Marshal.ThrowExceptionForHR(endpoint.GetMute(out var muted)); return (value, muted); }); }
     catch (COMException) { return null; }
   }
-  internal static void Set(float? value, bool? muted) => WithEndpoint(endpoint =>
+  internal static void Set(float? value, bool? muted)
   {
-    var context = Guid.Empty;
-    if (value is { } scalar) Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(Math.Clamp(scalar, 0, 1), ref context));
-    if (muted is { } flag) Marshal.ThrowExceptionForHR(endpoint.SetMute(flag, ref context));
-    return true;
-  });
+    try
+    {
+      WithEndpoint(endpoint =>
+      {
+        var context = Guid.Empty;
+        if (value is { } scalar) Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(Math.Clamp(scalar, 0, 1), ref context));
+        if (muted is { } flag) Marshal.ThrowExceptionForHR(endpoint.SetMute(flag, ref context));
+        return true;
+      });
+    }
+    catch (COMException) { }
+  }
   private static T WithEndpoint<T>(Func<IAudioEndpointVolume, T> work)
   {
     var enumerator = (IMMDeviceEnumerator)new DeviceEnumerator();

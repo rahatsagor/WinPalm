@@ -469,7 +469,20 @@ mod tests {
         assert!(allowed("https://example.com", false));
         assert!(allowed(" https://example.com\n", false), "pasted links often carry spaces");
         assert!(allowed("mailto:me@example.com", false));
-        for url in ["ms-msdt:/id/test", "search-ms:query=x", "file:///C:/x.bat", "ssh://host", "SMB://server/share"] {
+        for url in [
+            "ms-msdt:/id/test",
+            "search-ms:query=x",
+            "file:///C:/x.bat",
+            "ssh://host",
+            "SMB://server/share",
+            "sftp://server/path",
+            "ftps://server/path",
+            "dav://server/path",
+            "davs://server/path",
+            "webdav://server/path",
+            "webdavs://server/path",
+            "vnc://pc.local",
+        ] {
             assert!(!allowed(url, false), "{url}");
             assert!(allowed(url, true), "{url}");
         }

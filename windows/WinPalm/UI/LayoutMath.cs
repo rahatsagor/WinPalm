@@ -40,4 +40,27 @@ internal static class LayoutMath
     var (fullW, fullH) = measureTitle(safeWidth);
     return new HeaderTextLayout(safeWidth, fullW, fullH, clampedPill, true, fullH + belowGap + pillHeight);
   }
+
+  /// Places a stacked overlay popup near the bottom-right corner of the working
+  /// area while keeping its entire frame inside visible screen bounds.
+  internal static (int X, int Y) ClampOverlayOrigin(
+    int areaLeft,
+    int areaTop,
+    int areaRight,
+    int areaBottom,
+    int width,
+    int height,
+    int margin,
+    int stackIndex,
+    int stackStep)
+  {
+    var offset = Math.Clamp(stackIndex, 0, 4) * Math.Max(0, stackStep);
+    var minX = areaLeft + margin;
+    var minY = areaTop + margin;
+    var maxX = Math.Max(minX, areaRight - width - margin);
+    var maxY = Math.Max(minY, areaBottom - height - margin);
+    var desiredX = areaRight - width - margin - offset;
+    var desiredY = areaBottom - height - margin - offset;
+    return (Math.Clamp(desiredX, minX, maxX), Math.Clamp(desiredY, minY, maxY));
+  }
 }

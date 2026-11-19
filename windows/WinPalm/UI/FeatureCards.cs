@@ -742,7 +742,8 @@ internal sealed class CertificateSetupCard : Panel, ISizableBlock
 
     exportBtn = new PalmButton("Export certificate (.crt)…", onExportCert, ButtonTone.Secondary, IconKind.Folder, compact: true)
     {
-      BackColor = Theme.Surface
+      BackColor = Theme.Surface,
+      Enabled = !string.IsNullOrEmpty(certDownloadUrl)
     };
     Controls.Add(exportBtn);
 

@@ -100,6 +100,8 @@ sealed class Tests
       await Async("UpdateController catches InvalidDataException and cleans staging", ControllerReportsInvalidDataAndCleansStaging);
       Sync("UpdateInstaller RunStartup skips modal dialog during --complete-update", CompleteUpdateStartupNeverShowsBlockingModal);
       Sync("UpdateInstaller rolls back when --complete-update exits without success", CompleteUpdateFailureRollsBackAndRestartsPrevious);
+      Sync("LinkPolicy gates file, terminal, file-server and VNC links behind PowerShell permission", LinkPolicyGatesShellSchemes);
+      Sync("ClampOverlayOrigin keeps stacked approval prompts inside small screens", OverlayOriginClampsInsideWorkingArea);
     }
     finally { try { Directory.Delete(root, true); } catch { } }
     Console.WriteLine($"{passed} passed, {failed} failed");
@@ -903,6 +905,32 @@ sealed class Tests
     public int GetConnectivity(out int c) { c = connectivity; return 0; }
     public int GetCategory(out int c) { c = category; return categoryHr; }
     public int SetCategory(int c) => 0;
+  }
+
+  private void LinkPolicyGatesShellSchemes()
+  {
+    True(LinkPolicy.IsAllowed("https://example.com", allowShell: false));
+    True(LinkPolicy.IsAllowed(" http://localhost:8790 ", allowShell: false));
+    True(LinkPolicy.IsAllowed("mailto:user@example.com", allowShell: false));
+    False(LinkPolicy.IsAllowed("javascript:alert(1)", allowShell: true));
+    False(LinkPolicy.IsAllowed("data:text/html,hi", allowShell: true));
+    False(LinkPolicy.IsAllowed("no-scheme", allowShell: true));
+    False(LinkPolicy.IsAllowed("", allowShell: true));
+    foreach (var url in new[] { "file:///C:/x.bat", "ssh://host", "sftp://server/file", "ftps://server/file", "dav://server/path", "davs://server/path", "webdav://server/path", "webdavs://server/path", "vnc://pc.local", "ms-msdt:/id/test" })
+    {
+      False(LinkPolicy.IsAllowed(url, allowShell: false));
+      True(LinkPolicy.IsAllowed(url, allowShell: true));
+    }
+  }
+
+  private void OverlayOriginClampsInsideWorkingArea()
+  {
+    var normal = LayoutMath.ClampOverlayOrigin(0, 0, 1920, 1080, 392, 220, 20, 0, 18);
+    Equal((1508, 840), normal);
+    var stacked = LayoutMath.ClampOverlayOrigin(0, 0, 1920, 1080, 392, 220, 20, 3, 18);
+    Equal((1454, 786), stacked);
+    var tight = LayoutMath.ClampOverlayOrigin(100, 50, 480, 300, 392, 240, 20, 4, 18);
+    Equal((120, 70), tight);
   }
 
   private static string AssetUri(string tag, string name) => $"https://github.com/{ReleaseUpdates.Repository}/releases/download/{tag}/{name}";

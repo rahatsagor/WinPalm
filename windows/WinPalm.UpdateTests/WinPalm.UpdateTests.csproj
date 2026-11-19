@@ -11,6 +11,7 @@
     <Compile Include="../WinPalm/Services/BundledNotices.cs" Link="Services/BundledNotices.cs" />
     <Compile Include="../WinPalm/Services/ClipboardRestore.cs" Link="Services/ClipboardRestore.cs" />
     <Compile Include="../WinPalm/Services/Diagnostics.cs" Link="Services/Diagnostics.cs" />
+    <Compile Include="../WinPalm/Services/LinkPolicy.cs" Link="Services/LinkPolicy.cs" />
     <Compile Include="../WinPalm/Services/NetworkCheck.cs" Link="Services/NetworkCheck.cs" />
     <Compile Include="../WinPalm/Services/Preferences.cs" Link="Services/Preferences.cs" />
     <Compile Include="../WinPalm/Services/ReleaseUpdates.cs" Link="Services/ReleaseUpdates.cs" />

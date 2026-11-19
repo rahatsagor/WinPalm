@@ -898,9 +898,20 @@ internal sealed class MainWindow : Form
       fingerprint,
       () => Action(() =>
       {
+        var encoded = CoreBridge.Call(new { op = "certificate" }).GetString() ?? "";
+        var data = string.IsNullOrEmpty(encoded) ? [] : Convert.FromBase64String(encoded);
+        if (data.Length == 0)
+        {
+          ShowModal(() => PalmDialog.Info(
+            this,
+            "Certificate unavailable",
+            "WinPalm's certificate could not be loaded right now. Wait for WinPalm to finish starting or check Phone setup, then try again.",
+            BadgeTone.Warning));
+          return;
+        }
         using var dialog = new SaveFileDialog { FileName = "WinPalm.crt", Filter = "Certificate (*.crt)|*.crt" };
         if (ShowModal(() => dialog.ShowDialog(this)) == DialogResult.OK)
-          File.WriteAllBytes(dialog.FileName, Convert.FromBase64String(CoreBridge.Call(new { op = "certificate" }).GetString()!));
+          File.WriteAllBytes(dialog.FileName, data);
       }),
       () => Action(() =>
       {
