@@ -17,7 +17,7 @@ use str0m::{Candidate, Event, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{Notify, mpsc, watch};
 
-use crate::api::{DisplayApprovalRequest, DisplayCommand, HostEvent};
+use crate::api::{DisplayApprovalRequest, DisplayCommand, DisplayProfile, HostEvent};
 use crate::host::{Outgoing, Shared};
 use crate::protocol::{DisplayInfo, DisplayQuality, ServerMessage};
 
@@ -64,8 +64,8 @@ struct Frame {
     keyframe: bool,
 }
 
-/// HD text keeps only the newest waiting picture. A still screen sends no
-/// further updates, so dropping the newest would leave the phone out of date.
+/// One HD update may wait behind the active transfer. Full pictures may
+/// replace it, but dependent patches must wait for their base to be taken.
 #[derive(Default)]
 struct Latest {
     frame: Mutex<Option<Frame>>,
@@ -76,6 +76,17 @@ impl Latest {
     fn replace(&self, frame: Frame) {
         *self.frame.lock().unwrap_or_else(|p| p.into_inner()) = Some(frame);
         self.ready.notify_one();
+    }
+
+    fn insert_if_empty(&self, frame: Frame) -> Result<(), Vec<u8>> {
+        let mut guard = self.frame.lock().unwrap_or_else(|p| p.into_inner());
+        if guard.is_some() {
+            return Err(frame.data);
+        }
+        *guard = Some(frame);
+        drop(guard);
+        self.ready.notify_one();
+        Ok(())
     }
 
     fn take(&self) -> Option<Frame> {
@@ -501,35 +512,51 @@ impl DisplayHub {
         timestamp_us: u64,
         keyframe: bool,
     ) -> bool {
+        self.try_frame(shared, session, generation, data, timestamp_us, keyframe).is_ok()
+    }
+
+    pub(crate) fn try_frame(
+        &self,
+        shared: &Shared,
+        session: u64,
+        generation: u64,
+        data: Vec<u8>,
+        timestamp_us: u64,
+        keyframe: bool,
+    ) -> Result<(), Vec<u8>> {
         if data.is_empty() || data.len() > MAX_IMAGE || access(shared, session).is_err() {
-            return false;
+            return Err(data);
         }
         let guard = self.active.lock().unwrap_or_else(|p| p.into_inner());
         let Some(active) =
             guard.as_ref().filter(|a| a.session == session && a.generation == generation && a.alive.elapsed() <= LEASE)
         else {
-            return false;
+            return Err(data);
         };
         if active.original {
-            active.latest.replace(Frame { data, timestamp_us, queued: Instant::now(), keyframe });
-            return true;
+            let frame = Frame { data, timestamp_us, queued: Instant::now(), keyframe };
+            if keyframe {
+                active.latest.replace(frame);
+                return Ok(());
+            }
+            return active.latest.insert_if_empty(frame);
         }
         if data.len() > MAX_FRAME {
-            return false;
+            return Err(data);
         }
         if active.needs_keyframe.load(Ordering::Acquire) && !keyframe {
-            return false;
+            return Err(data);
         }
         match active.frames.try_send(Frame { data, timestamp_us, queued: Instant::now(), keyframe }) {
             Ok(()) => {
                 if keyframe {
                     active.needs_keyframe.store(false, Ordering::Release);
                 }
-                true
+                Ok(())
             }
-            Err(_) => {
+            Err(err) => {
                 active.needs_keyframe.store(true, Ordering::Release);
-                false
+                Err(err.into_inner().data)
             }
         }
     }
@@ -548,6 +575,7 @@ pub(crate) fn start(
     display_id: String,
     sdp: String,
     quality: DisplayQuality,
+    patches: bool,
 ) {
     let refuse = |message: &str| shared.send_to(session, state(request, "error", Some(message)));
     if let Err(message) = access(&shared, session) {
@@ -611,6 +639,7 @@ pub(crate) fn start(
             display_id,
             sdp,
             quality,
+            patches,
             rx,
             &latest,
             cancelled,
@@ -625,20 +654,31 @@ pub(crate) fn start(
 
 /// Conservative receiver limits, including the macroblock rate. Many phone
 /// offers advertise level 3.1 even when their hardware can decode more.
+/// Desktop streams are idle when still, so higher LAN ceilings improve scrolling
+/// without raising idle bandwidth; BWE scales down on slower links.
 fn capture_limits(quality: DisplayQuality, level: u8) -> (u32, u32, u32) {
     if quality == DisplayQuality::Original {
-        return (3840, 1, 0);
+        return (3840, 4, 0);
     }
     if level < 31 {
         return (352, 15, 400_000);
     }
     match quality {
-        DisplayQuality::Auto if level >= 32 => (1280, 60, 4_000_000),
-        DisplayQuality::Auto => (896, 60, 3_000_000),
-        DisplayQuality::Battery => (960, 30, 1_500_000),
-        DisplayQuality::Sharp if level >= 40 => (1920, 30, 6_000_000),
-        DisplayQuality::Sharp => (1280, 30, 4_000_000),
+        DisplayQuality::Auto if level >= 32 => (1280, 60, 8_000_000),
+        DisplayQuality::Auto => (896, 60, 4_500_000),
+        DisplayQuality::Battery => (960, 30, 2_000_000),
+        DisplayQuality::Sharp if level >= 40 => (1920, 30, 12_000_000),
+        DisplayQuality::Sharp => (1280, 30, 6_000_000),
         DisplayQuality::Original => unreachable!(),
+    }
+}
+
+fn h264_profile(profile_level_id: Option<u32>) -> (u8, DisplayProfile) {
+    match profile_level_id.unwrap_or(0x42e01f) >> 8 {
+        0x640c => (3, DisplayProfile::ConstrainedHigh),
+        0x6400 => (2, DisplayProfile::ConstrainedHigh),
+        0x4d00 => (1, DisplayProfile::Main),
+        _ => (0, DisplayProfile::ConstrainedBaseline),
     }
 }
 
@@ -717,6 +757,7 @@ async fn run(
     display_id: String,
     offer_text: String,
     quality: DisplayQuality,
+    patches: bool,
     mut frames: mpsc::Receiver<Frame>,
     latest: &Latest,
     mut cancelled: watch::Receiver<bool>,
@@ -774,12 +815,16 @@ async fn run(
         .set_ice_lite(true)
         .set_send_buffer_video(1024)
         .set_sctp_max_message_size(1024)
-        .set_sctp_max_buffered_amount(128 * 1024)
-        .enable_bwe(Some(Bitrate::mbps(1)))
+        .set_sctp_max_buffered_amount(256 * 1024)
+        .enable_bwe(Some(Bitrate::mbps(4)))
         .set_stats_interval(None);
     builder.codec_config().clear();
-    // The encoder always emits Constrained Baseline. The receiver's offered
-    // level, not this local receive ceiling, determines capture limits below.
+    // Prefer CABAC-capable H.264 profiles (no B-frames) when the browser
+    // offers them, falling back to Constrained Baseline. The receiver's
+    // offered level determines capture limits below.
+    builder.codec_config().add_h264(114.into(), Some(115.into()), true, 0x640c2a);
+    builder.codec_config().add_h264(112.into(), Some(113.into()), true, 0x64002a);
+    builder.codec_config().add_h264(123.into(), Some(119.into()), true, 0x4d002a);
     builder.codec_config().add_h264(108.into(), Some(109.into()), true, 0x42e02a);
     let started = Instant::now();
     let mut rtc = builder.build(started);
@@ -817,6 +862,7 @@ async fn run(
     let mut last_config = Instant::now();
     let mut last_keyframe = Instant::now() - Duration::from_secs(1);
     let mut waiting_for_keyframe = true;
+    let mut sent_video = false;
     let mut send_failures = SendFailures::default();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -850,15 +896,16 @@ async fn run(
                 return Err("HD text could not keep up with the connection. Choose Sharper text and try again.".into());
             }
             if let Some(mut channel) = rtc.channel(channel) {
-                // One in-flight picture, the newest waiting picture, and 128 KiB of SCTP
+                // One in-flight picture, the newest waiting picture, and 256 KiB of SCTP
                 // buffering. Chunk writes yield regularly to network input and cancellation.
-                for _ in 0..4 {
-                    if *offset == frame.data.len() || channel.buffered_amount() >= 64 * 1024 {
+                let magic = if frame.keyframe { b"CPNG" } else { b"CPAT" };
+                for _ in 0..8 {
+                    if *offset == frame.data.len() || channel.buffered_amount() >= 128 * 1024 {
                         break;
                     }
                     let end = (*offset + 16 * 1024 - 16).min(frame.data.len());
                     let mut chunk = Vec::with_capacity(16 + end - *offset);
-                    chunk.extend_from_slice(b"CPNG");
+                    chunk.extend_from_slice(magic);
                     chunk.extend_from_slice(&sequence.to_le_bytes());
                     chunk.extend_from_slice(&(frame.data.len() as u32).to_le_bytes());
                     chunk.extend_from_slice(&(*offset as u32).to_le_bytes());
@@ -900,16 +947,24 @@ async fn run(
                     if added.direction != Direction::SendOnly {
                         return Err("The browser requested an unsupported video connection.".into());
                     }
-                    let pt = rtc.writer(added.mid).and_then(|writer| {
-                        writer.payload_params().find(|p| p.spec().codec == Codec::H264).map(|p| p.pt())
+                    let chosen = rtc.writer(added.mid).and_then(|writer| {
+                        writer
+                            .payload_params()
+                            .filter(|p| p.spec().codec == Codec::H264)
+                            .max_by_key(|p| h264_profile(p.spec().format.profile_level_id).0)
+                            .map(|p| (p.pt(), h264_profile(p.spec().format.profile_level_id).1))
                     });
-                    let Some(pt) = pt else { return Err("This browser did not offer compatible H.264 video.".into()) };
+                    let Some((pt, profile)) = chosen else {
+                        return Err("This browser did not offer compatible H.264 video.".into());
+                    };
                     let level = receiver_level(&offer_text, *pt);
                     let (dimension, fps, bitrate) = capture_limits(quality, level);
-                    media = Some((added.mid, pt, dimension));
+                    media = Some((added.mid, pt, dimension, profile));
                     maximum_bitrate = bitrate;
                     current_bitrate = bitrate;
                     maximum_fps = fps;
+                    let initial_bwe = bitrate.min(6_000_000) as u64;
+                    rtc.bwe().reset(Bitrate::bps(initial_bwe));
                     rtc.bwe().set_bitrate(Bitrate::ZERO, Bitrate::bps(bitrate as u64));
                 }
                 Output::Event(Event::Connected) => {
@@ -937,7 +992,7 @@ async fn run(
                     }
                 }
                 Output::Event(Event::EgressBitrateEstimate(estimate)) => {
-                    if original {
+                    if original || !sent_video {
                         continue;
                     }
                     let estimate = match estimate {
@@ -945,10 +1000,10 @@ async fn run(
                         _ => continue,
                     };
                     let bitrate = ((estimate.as_u64() * 8 / 10).min(maximum_bitrate as u64) as u32).max(250_000);
-                    if connected
-                        && last_config.elapsed() >= Duration::from_secs(1)
-                        && bitrate.abs_diff(current_bitrate) > current_bitrate / 5
-                    {
+                    let decreasing = bitrate < current_bitrate;
+                    let cooldown = if decreasing { Duration::from_millis(400) } else { Duration::from_secs(1) };
+                    let threshold = if decreasing { current_bitrate * 3 / 20 } else { current_bitrate / 5 };
+                    if connected && last_config.elapsed() >= cooldown && bitrate.abs_diff(current_bitrate) > threshold {
                         current_bitrate = bitrate;
                         let fps = if bitrate < 800_000 {
                             maximum_fps.min(15)
@@ -975,9 +1030,11 @@ async fn run(
                         generation,
                         display_id: display_id.clone(),
                         max_dimension: 3840,
-                        fps: 1,
+                        fps: 4,
                         bitrate: 0,
                         original: true,
+                        patches,
+                        profile: DisplayProfile::ConstrainedBaseline,
                     },
                 );
                 shared.send_to(session, state(request, "streaming", None));
@@ -985,7 +1042,7 @@ async fn run(
             if !original
                 && connected
                 && !capture_started
-                && let Some((_, _, max_dimension)) = media
+                && let Some((_, _, max_dimension, profile)) = media
             {
                 capture_started = true;
                 shared.delegate.display_command(
@@ -997,6 +1054,8 @@ async fn run(
                         fps: maximum_fps,
                         bitrate: current_bitrate,
                         original: false,
+                        patches: false,
+                        profile,
                     },
                 );
                 shared.send_to(session, state(request, "streaming", None));
@@ -1020,13 +1079,17 @@ async fn run(
                 if frame.queued.elapsed() > Duration::from_millis(150) {
                     waiting_for_keyframe = true;
                     needs_keyframe.store(true, Ordering::Release);
+                    // Even a recently requested IDR can age out. A still desktop
+                    // has no next frame to trigger recovery, so request one now.
                     shared.delegate.display_command(session, DisplayCommand::KeyFrame { generation });
+                    last_keyframe = Instant::now();
                     continue;
                 }
                 if waiting_for_keyframe && !frame.keyframe { continue; }
                 if frame.keyframe { waiting_for_keyframe = false; }
-                if let Some((mid, pt, _)) = media {
+                if let Some((mid, pt, _, _)) = media {
                     rtc.writer(mid).ok_or("The video track ended.")?.write(pt, Instant::now(), MediaTime::from_micros(frame.timestamp_us), frame.data).map_err(|e| e.to_string())?;
+                    sent_video = true;
                 }
             }
             _ = tokio::time::sleep_until(deadline.into()) => { rtc.handle_input(Input::Timeout(Instant::now())).map_err(|e| e.to_string())?; }
@@ -1051,12 +1114,30 @@ mod tests {
 
     #[test]
     fn levels_limit_resolution_and_macroblock_rate() {
-        assert_eq!(capture_limits(DisplayQuality::Auto, 31), (896, 60, 3_000_000));
-        assert_eq!(capture_limits(DisplayQuality::Sharp, 31).0, 1280);
-        assert_eq!(capture_limits(DisplayQuality::Sharp, 40).0, 1920);
-        assert_eq!(capture_limits(DisplayQuality::Original, 31), (3840, 1, 0));
+        assert_eq!(capture_limits(DisplayQuality::Auto, 31), (896, 60, 4_500_000));
+        assert_eq!(capture_limits(DisplayQuality::Auto, 32), (1280, 60, 8_000_000));
+        assert_eq!(capture_limits(DisplayQuality::Battery, 31), (960, 30, 2_000_000));
+        assert_eq!(capture_limits(DisplayQuality::Sharp, 31), (1280, 30, 6_000_000));
+        assert_eq!(capture_limits(DisplayQuality::Sharp, 40), (1920, 30, 12_000_000));
+        assert_eq!(capture_limits(DisplayQuality::Original, 31), (3840, 4, 0));
         assert_eq!(receiver_level("a=fmtp:108 packetization-mode=1; profile-level-id=42e020\r\n", 108), 32);
         assert_eq!(receiver_level("a=fmtp:109 profile-level-id=42e02a\r\n", 108), 31);
+    }
+
+    #[test]
+    fn h264_profile_ranking_prefers_cabac_profiles_over_baseline() {
+        let ch = h264_profile(Some(0x640c2a));
+        let high = h264_profile(Some(0x64002a));
+        let main = h264_profile(Some(0x4d002a));
+        let cb = h264_profile(Some(0x42e01f));
+        let unknown = h264_profile(None);
+
+        assert_eq!(ch.1, DisplayProfile::ConstrainedHigh);
+        assert_eq!(high.1, DisplayProfile::ConstrainedHigh);
+        assert_eq!(main.1, DisplayProfile::Main);
+        assert_eq!(cb.1, DisplayProfile::ConstrainedBaseline);
+        assert_eq!(unknown.1, DisplayProfile::ConstrainedBaseline);
+        assert!(ch.0 > high.0 && high.0 > main.0 && main.0 > cb.0);
     }
 
     #[test]

@@ -45,6 +45,121 @@ impl EncoderQueue {
     }
 }
 
+/// Token bucket pacing captures at the active frame rate while keeping a
+/// two-frame burst reserve so waking from an idle desktop is never delayed.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct CaptureBucket {
+    interval: f64,
+    credit: f64,
+    updated: Instant,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl CaptureBucket {
+    const BURST: f64 = 2.0;
+
+    pub(crate) fn new(fps: u32, now: Instant) -> Self {
+        let interval = 1.0 / f64::from(fps.max(1));
+        Self { interval, credit: Self::BURST * interval, updated: now }
+    }
+
+    pub(crate) fn reset(&mut self, fps: u32, now: Instant) {
+        self.interval = 1.0 / f64::from(fps.max(1));
+        self.credit = Self::BURST * self.interval;
+        self.updated = now;
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.updated).as_secs_f64();
+        if elapsed > 0.0 {
+            self.credit = (self.credit + elapsed).min(Self::BURST * self.interval);
+            self.updated = now;
+        }
+    }
+
+    pub(crate) fn ready(&self, now: Instant) -> bool {
+        self.wait_duration(now).is_zero()
+    }
+
+    pub(crate) fn spend(&mut self, now: Instant) {
+        self.refill(now);
+        self.credit = (self.credit - self.interval).max(0.0);
+    }
+
+    pub(crate) fn wait_duration(&self, now: Instant) -> Duration {
+        let elapsed = now.saturating_duration_since(self.updated).as_secs_f64();
+        let available = (self.credit + elapsed).min(Self::BURST * self.interval);
+        if available >= self.interval {
+            Duration::ZERO
+        } else {
+            Duration::from_secs_f64((self.interval - available).max(0.0))
+        }
+    }
+}
+
+/// Bounded idle paint-over refinement: after desktop motion stops, re-encodes
+/// up to three frames with widened rate limits to sharpen static text.
+#[derive(Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct IdleRefinement {
+    attempts: u8,
+    first_encoded_size: Option<usize>,
+    next_due: Option<Instant>,
+    pub(crate) in_flight: bool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl IdleRefinement {
+    pub(crate) const INITIAL_DELAY: Duration = Duration::from_millis(180);
+
+    pub(crate) fn cancel(&mut self) {
+        self.attempts = 0;
+        self.first_encoded_size = None;
+        self.next_due = None;
+        self.in_flight = false;
+    }
+
+    pub(crate) fn next_due(&self) -> Option<Instant> {
+        (!self.in_flight).then_some(self.next_due).flatten()
+    }
+
+    pub(crate) fn is_due(&self, now: Instant) -> bool {
+        !self.in_flight && self.next_due.is_some_and(|due| now >= due)
+    }
+
+    pub(crate) fn schedule_initial(&mut self, now: Instant) {
+        self.attempts = 0;
+        self.first_encoded_size = None;
+        self.next_due = Some(now + Self::INITIAL_DELAY);
+    }
+
+    pub(crate) fn mark_started(&mut self) {
+        self.in_flight = true;
+        self.next_due = None;
+    }
+
+    /// A dropped frame still uses one of the three attempts for this idle image.
+    /// Returns `true` when another refinement pass should be scheduled.
+    pub(crate) fn should_continue(&mut self, bytes: Option<usize>, small_frame_size: usize) -> bool {
+        self.in_flight = false;
+        self.attempts = self.attempts.saturating_add(1);
+        if self.attempts >= 3 {
+            self.next_due = None;
+            return false;
+        }
+        let Some(bytes) = bytes else {
+            return true;
+        };
+        let baseline = *self.first_encoded_size.get_or_insert(bytes);
+        bytes > small_frame_size && bytes.saturating_mul(4) > baseline
+    }
+
+    pub(crate) fn schedule_next(&mut self, now: Instant, fps: u32) {
+        let pace_ms = (1000 / u64::from(fps.max(1))).max(33);
+        self.next_due = Some(now + Duration::from_millis(pace_ms));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +212,47 @@ mod tests {
         queue.completed(20); // A duplicate or stale output releases no credit.
         assert!(!queue.ready());
         assert!(queue.stalled(now + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn capture_bucket_allows_two_frame_burst_then_paces_at_configured_fps() {
+        let start = Instant::now();
+        let mut bucket = CaptureBucket::new(60, start);
+        assert!(bucket.ready(start));
+        bucket.spend(start);
+        assert!(bucket.ready(start));
+        bucket.spend(start);
+        assert!(!bucket.ready(start));
+        assert!(bucket.wait_duration(start) > Duration::from_millis(15));
+
+        let next = start + Duration::from_micros(16_800);
+        assert!(bucket.ready(next));
+        bucket.spend(next);
+        assert!(!bucket.ready(next));
+
+        let later = next + Duration::from_secs(1);
+        bucket.reset(30, later);
+        assert!(bucket.ready(later));
+        bucket.spend(later);
+        bucket.spend(later);
+        assert!(!bucket.ready(later));
+        assert!(bucket.wait_duration(later) > Duration::from_millis(32));
+    }
+
+    #[test]
+    fn idle_refinement_bounds_attempts_and_stops_on_convergence() {
+        let mut refinement = IdleRefinement::default();
+        assert!(refinement.should_continue(Some(40_000), 1024));
+        assert!(refinement.should_continue(Some(20_000), 1024));
+        assert!(!refinement.should_continue(Some(15_000), 1024));
+
+        let mut converged = IdleRefinement::default();
+        assert!(converged.should_continue(Some(40_000), 1024));
+        assert!(!converged.should_continue(Some(8_000), 1024));
+
+        let mut dropped = IdleRefinement::default();
+        assert!(dropped.should_continue(None, 1024));
+        assert!(dropped.should_continue(None, 1024));
+        assert!(!dropped.should_continue(None, 1024));
     }
 }

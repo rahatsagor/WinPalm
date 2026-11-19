@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Foundation::{HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -15,8 +15,8 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::core::Interface;
 
-use crate::api::DisplayCommand;
-use crate::display_capture_state::Gate;
+use crate::api::{DisplayCommand, DisplayProfile};
+use crate::display_capture_state::{CaptureBucket, Gate, IdleRefinement};
 use crate::display_pixels as pixels;
 use crate::host::CoreHost;
 use crate::protocol::DisplayInfo;
@@ -98,8 +98,7 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
     }
     let mut active: Option<Capture> = None;
     loop {
-        let wait =
-            active.as_ref().map(|c| c.next.saturating_duration_since(Instant::now()).min(Duration::from_millis(250)));
+        let wait = active.as_ref().map(|c| c.next_wake(Instant::now()));
         let job = match wait {
             Some(wait) => rx.recv_timeout(wait),
             None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
@@ -115,7 +114,16 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
                             };
                             host.display_sources(job.session, request_id, displays, message);
                         }
-                        DisplayCommand::Start { generation, display_id, max_dimension, fps, bitrate, original } => {
+                        DisplayCommand::Start {
+                            generation,
+                            display_id,
+                            max_dimension,
+                            fps,
+                            bitrate,
+                            original,
+                            patches,
+                            profile,
+                        } => {
                             if !gate.current(generation) || !host.display_capture_active(job.session, generation) {
                                 continue;
                             }
@@ -128,6 +136,8 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
                                 fps,
                                 bitrate,
                                 original,
+                                patches,
+                                profile,
                                 software_only: false,
                             };
                             match Capture::new(job.host, settings) {
@@ -214,10 +224,13 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
             active = None;
             continue;
         }
-        if Instant::now() < capture.next {
+        let now = Instant::now();
+        if !capture.should_tick(now) {
             continue;
         }
-        capture.next = Instant::now() + Duration::from_micros(1_000_000 / capture.settings.fps.clamp(1, 60) as u64);
+        if now >= capture.next {
+            capture.next = now + Duration::from_micros(1_000_000 / capture.settings.fps.clamp(1, 60) as u64);
+        }
         if let Err(message) = capture.tick(&host, &gate) {
             host.display_failed(capture.settings.session, capture.settings.generation, message);
             active = None;
@@ -337,8 +350,17 @@ struct Settings {
     fps: u32,
     bitrate: u32,
     original: bool,
+    patches: bool,
+    profile: DisplayProfile,
     software_only: bool,
 }
+
+enum AcquireUpdate {
+    Idle,
+    CursorOnly { dirty: Option<pixels::PixelRect> },
+    Desktop { dirty: Option<pixels::PixelRect> },
+}
+
 struct Capture {
     host: Weak<CoreHost>,
     settings: Settings,
@@ -359,7 +381,16 @@ struct Capture {
     cursor: Vec<u8>,
     cursor_info: DXGI_OUTDUPL_POINTER_SHAPE_INFO,
     pointer: DXGI_OUTDUPL_POINTER_POSITION,
+    last_cursor_rect: Option<pixels::PixelRect>,
+    dirty_buf: Vec<RECT>,
+    move_buf: Vec<DXGI_OUTDUPL_MOVE_RECT>,
+    original_dirty_rect: Option<pixels::PixelRect>,
+    original_needs_full: bool,
+    original_payload: Option<(Vec<u8>, bool)>,
+    original_retry_at: Option<Instant>,
     encoder: Option<Encoder>,
+    bucket: CaptureBucket,
+    refinement: IdleRefinement,
     size: (u32, u32),
     keyframe: bool,
     pending: bool,
@@ -372,6 +403,26 @@ struct Capture {
     _power: power::KeepAwake,
 }
 impl Capture {
+    fn next_wake(&self, now: Instant) -> Duration {
+        let mut wake = self.next.saturating_duration_since(now).min(Duration::from_millis(250));
+        if let Some(retry) = self.original_retry_at {
+            wake = wake.min(retry.saturating_duration_since(now));
+        }
+        if !self.settings.original {
+            if let Some(due) = self.refinement.next_due() {
+                wake = wake.min(due.saturating_duration_since(now));
+            }
+            if self.pending && !self.keyframe {
+                wake = wake.min(self.bucket.wait_duration(now));
+            }
+        }
+        wake
+    }
+    fn should_tick(&self, now: Instant) -> bool {
+        now >= self.next
+            || self.original_retry_at.is_some_and(|retry| now >= retry)
+            || (!self.settings.original && self.refinement.is_due(now))
+    }
     fn new(host: Weak<CoreHost>, mut settings: Settings) -> Result<Self> {
         let mut timer = crate::input::windows::TimerResolution::default();
         timer.want(!settings.original);
@@ -403,14 +454,15 @@ impl Capture {
             let encoder = if settings.original {
                 None
             } else if settings.software_only {
-                Some(Encoder::software(size, settings.fps, settings.bitrate)?)
+                Some(Encoder::software(size, settings.fps, settings.bitrate, settings.profile)?)
             } else {
-                Some(Encoder::new(size, settings.fps, settings.bitrate)?)
+                Some(Encoder::new(size, settings.fps, settings.bitrate, settings.profile)?)
             };
             settings.software_only |= encoder.as_ref().is_some_and(|e| !e.hardware());
+            let now = Instant::now();
             Ok(Self {
                 host,
-                settings,
+                settings: settings.clone(),
                 output,
                 device,
                 context,
@@ -428,14 +480,23 @@ impl Capture {
                 cursor: vec![],
                 cursor_info: Default::default(),
                 pointer: Default::default(),
+                last_cursor_rect: None,
+                dirty_buf: vec![],
+                move_buf: vec![],
+                original_dirty_rect: None,
+                original_needs_full: true,
+                original_payload: None,
+                original_retry_at: None,
                 encoder,
+                bucket: CaptureBucket::new(settings.fps, now),
+                refinement: IdleRefinement::default(),
                 size,
                 keyframe: true,
                 pending: false,
-                pending_since: Instant::now(),
-                next: Instant::now(),
-                began: Instant::now(),
-                first_frame_deadline: Instant::now() + Duration::from_secs(10),
+                pending_since: now,
+                next: now,
+                began: now,
+                first_frame_deadline: now + Duration::from_secs(10),
                 sent: false,
                 _timer: timer,
                 _power: power::KeepAwake::new()?,
@@ -452,13 +513,33 @@ impl Capture {
             Err(_) => return Err("Windows screen capture stopped. Wake the display and start viewing again.".into()),
         };
         let timestamp = self.began.elapsed().as_micros() as u64;
-        if let Some(desktop_changed) = update {
-            if !self.pending {
-                self.pending_since = Instant::now();
+        match update {
+            AcquireUpdate::Idle => {}
+            AcquireUpdate::CursorOnly { dirty } => {
+                if !self.pending {
+                    self.pending_since = Instant::now();
+                }
+                self.pending = true;
+                self.picture_dirty = true;
+                self.record_damage(dirty);
+                self.refinement.cancel();
+                if let Some(encoder) = &mut self.encoder {
+                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                }
             }
-            self.pending = true;
-            self.background_dirty |= desktop_changed;
-            self.picture_dirty = true;
+            AcquireUpdate::Desktop { dirty } => {
+                if !self.pending {
+                    self.pending_since = Instant::now();
+                }
+                self.pending = true;
+                self.background_dirty = true;
+                self.picture_dirty = true;
+                self.record_damage(dirty);
+                self.refinement.cancel();
+                if let Some(encoder) = &mut self.encoder {
+                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                }
+            }
         }
         if !gate.current(self.settings.generation)
             || !host.display_capture_active(self.settings.session, self.settings.generation)
@@ -467,25 +548,7 @@ impl Capture {
             return Ok(());
         }
         if self.settings.original {
-            if self.pending && !self.raw.is_empty() {
-                self.prepare_picture()?;
-                let mut png = vec![];
-                {
-                    let mut encoder = png::Encoder::new(&mut png, self.size.0, self.size.1);
-                    encoder.set_color(png::ColorType::Rgba);
-                    encoder.set_depth(png::BitDepth::Eight);
-                    encoder.set_compression(png::Compression::Fast);
-                    let mut writer = encoder.write_header().map_err(|_| "The HD picture could not be prepared.")?;
-                    writer.write_image_data(&self.picture).map_err(|_| "The HD picture could not be prepared.")?;
-                }
-                if png.len() > 16 * 1024 * 1024 {
-                    return Err("This HD picture is too large. Choose Sharper text for this screen content.".into());
-                }
-                if host.display_frame(self.settings.session, self.settings.generation, png, timestamp, true) {
-                    self.sent = true;
-                    self.pending = false;
-                }
-            }
+            self.tick_original(host, timestamp)?;
         } else if let Err(message) = self.encode_frame(host, gate, timestamp) {
             if !self.fallback_encoder()? {
                 return Err(message);
@@ -502,6 +565,91 @@ impl Capture {
         }
         if !self.sent && Instant::now() > self.first_frame_deadline {
             return Err("Windows could not produce a screen picture. Check the display and graphics/media drivers, or try HD text.".into());
+        }
+        Ok(())
+    }
+    fn record_damage(&mut self, dirty: Option<pixels::PixelRect>) {
+        if !self.settings.original {
+            return;
+        }
+        // New damage invalidates any cached patch so the next send merges it.
+        self.original_payload = None;
+        if !self.sent || self.original_needs_full {
+            self.original_needs_full = true;
+            self.original_dirty_rect = None;
+            return;
+        }
+        match dirty {
+            Some(rect) => {
+                self.original_dirty_rect = Some(self.original_dirty_rect.map_or(rect, |existing| existing.union(rect)));
+            }
+            None => {
+                self.original_needs_full = true;
+                self.original_dirty_rect = None;
+            }
+        }
+    }
+    fn encode_png(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+        let mut png = vec![];
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|_| "The HD picture could not be prepared.")?;
+        writer.write_image_data(data).map_err(|_| "The HD picture could not be prepared.")?;
+        drop(writer);
+        Ok(png)
+    }
+    fn tick_original(&mut self, host: &CoreHost, timestamp: u64) -> Result<()> {
+        let now = Instant::now();
+        if self.original_retry_at.is_some_and(|retry| now < retry) {
+            return Ok(());
+        }
+        self.original_retry_at = None;
+        if self.original_payload.is_none() {
+            if !self.pending || self.raw.is_empty() {
+                return Ok(());
+            }
+            self.prepare_picture()?;
+            let (send_full, crop) = if !self.sent || self.original_needs_full || !self.settings.patches {
+                (true, None)
+            } else if let Some(dirty) = self.original_dirty_rect {
+                if dirty.exceeds_patch_threshold(self.size) { (true, None) } else { (false, Some(dirty)) }
+            } else {
+                self.pending = false;
+                return Ok(());
+            };
+            let payload = if send_full {
+                Self::encode_png(&self.picture, self.size.0, self.size.1)?
+            } else if let Some(rect) = crop {
+                let cropped = pixels::crop_rgba(&self.picture, self.size.0, rect);
+                let png = Self::encode_png(&cropped, rect.width, rect.height)?;
+                pixels::patch_payload(rect, self.size, &png)
+                    .ok_or("The HD picture could not be prepared. Try Sharper text or start viewing again.")?
+            } else {
+                return Ok(());
+            };
+            if payload.len() > 16 * 1024 * 1024 {
+                return Err("This HD picture is too large. Choose Sharper text for this screen content.".into());
+            }
+            self.original_payload = Some((payload, send_full));
+        }
+        if let Some((payload, send_full)) = self.original_payload.take() {
+            match host.try_display_frame(self.settings.session, self.settings.generation, payload, timestamp, send_full)
+            {
+                Ok(()) => {
+                    self.sent = true;
+                    self.pending = false;
+                    self.original_needs_full = false;
+                    self.original_dirty_rect = None;
+                    self.original_retry_at = None;
+                }
+                Err(payload) => {
+                    // Reuse the encoded patch while waiting for transport capacity.
+                    self.original_payload = Some((payload, send_full));
+                    self.original_retry_at = Some(now + Duration::from_millis(60));
+                }
+            }
         }
         Ok(())
     }
@@ -530,6 +678,7 @@ impl Capture {
         if self.settings.original {
             return Ok(());
         }
+        let now = Instant::now();
         let fps = fps.clamp(1, 60);
         let fps_changed = fps != self.settings.fps;
         self.settings.fps = fps;
@@ -540,18 +689,20 @@ impl Capture {
             let hardware = self.encoder.as_ref().is_some_and(Encoder::hardware);
             self.encoder = None;
             self.encoder = Some(if hardware {
-                Encoder::new(self.size, fps, bitrate)?
+                Encoder::new(self.size, fps, bitrate, self.settings.profile)?
             } else {
-                Encoder::software(self.size, fps, bitrate)?
+                Encoder::software(self.size, fps, bitrate, self.settings.profile)?
             });
             self.settings.software_only |= self.encoder.as_ref().is_some_and(|e| !e.hardware());
+            self.bucket.reset(fps, now);
+            self.refinement.cancel();
             self.keyframe = true;
             self.pending = !self.picture.is_empty();
-            self.pending_since = Instant::now();
-            self.next = Instant::now();
+            self.pending_since = now;
+            self.next = now;
             self.sent = false;
-            self.first_frame_deadline = Instant::now() + Duration::from_secs(10);
-        } else if let Some(encoder) = &self.encoder
+            self.first_frame_deadline = now + Duration::from_secs(10);
+        } else if let Some(encoder) = &mut self.encoder
             && let Err(message) = encoder.bitrate(bitrate)
             && !self.fallback_encoder()?
         {
@@ -566,48 +717,87 @@ impl Capture {
         // Some hardware drivers accept the media type but reject system-memory
         // samples or stall on their first picture. Recover within the same RTP
         // stream using a fresh software encoder and a fresh IDR.
+        let now = Instant::now();
         self.encoder = None;
-        self.encoder = Some(Encoder::software(self.size, self.settings.fps, self.settings.bitrate)?);
+        self.encoder =
+            Some(Encoder::software(self.size, self.settings.fps, self.settings.bitrate, self.settings.profile)?);
         self.settings.software_only = true;
+        self.bucket.reset(self.settings.fps, now);
+        self.refinement.cancel();
         self.keyframe = true;
         self.pending = true;
-        self.pending_since = Instant::now();
-        self.first_frame_deadline = Instant::now() + Duration::from_secs(10);
+        self.pending_since = now;
+        self.first_frame_deadline = now + Duration::from_secs(10);
         self.sent = false;
         Ok(true)
     }
     fn encode_frame(&mut self, host: &CoreHost, gate: &Gate, timestamp: u64) -> Result<()> {
-        let wants_input = (self.pending || self.keyframe) && !self.raw.is_empty();
-        let ready = if let Some(encoder) = &mut self.encoder { wants_input && encoder.ready()? } else { false };
+        let now = Instant::now();
+        let wants_normal = (self.pending || self.keyframe) && !self.raw.is_empty();
+        let wants_refinement = !wants_normal && self.sent && !self.raw.is_empty() && self.refinement.is_due(now);
+        let can_feed = if wants_normal { self.keyframe || self.bucket.ready(now) } else { wants_refinement };
+        let ready = if let Some(encoder) = &mut self.encoder { can_feed && encoder.ready()? } else { false };
         if ready {
             // Rescale only the newest desktop when the encoder can accept
             // it. Pointer-only updates reuse the resized background, and
-            // IDR retries reuse the already converted NV12 picture.
+            // IDR/refinement retries reuse the already converted NV12 picture.
             self.prepare_picture()?;
             if self.video_dirty {
                 pixels::nv12_into(&self.picture, self.size.0 as usize, self.size.1 as usize, &mut self.video_picture);
                 self.video_dirty = false;
             }
-            if let Some(encoder) = &mut self.encoder
-                && encoder.input(&self.video_picture, timestamp, self.keyframe)?
-            {
-                // Keep requesting an IDR until it actually reaches the phone.
-                // A driver may drop an accepted input under rate control.
-                self.pending = false;
+            if let Some(encoder) = &mut self.encoder {
+                if wants_refinement {
+                    encoder.set_wide_rate_limit(true, self.settings.bitrate);
+                    if encoder.input(&self.video_picture, timestamp, false)? {
+                        self.refinement.mark_started();
+                    }
+                } else {
+                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                    if encoder.input(&self.video_picture, timestamp, self.keyframe)? {
+                        // Keep requesting an IDR until it actually reaches the phone.
+                        // A driver may drop an accepted input under rate control.
+                        self.pending = false;
+                        self.bucket.spend(now);
+                    }
+                }
             }
         }
-        let Some(encoder) = &mut self.encoder else { return Ok(()) };
-        for (data, time, key) in encoder.output()? {
+        let frames = {
+            let Some(encoder) = &mut self.encoder else { return Ok(()) };
+            encoder.output()?
+        };
+        let small_frame_size = (self.settings.bitrate as usize / 8 / 4).max(16 * 1024);
+        for (data, time, key) in frames {
             if !gate.current(self.settings.generation) {
                 break;
             }
+            let encoded_len = data.len();
+            let was_refinement = self.refinement.in_flight;
             if host.display_frame(self.settings.session, self.settings.generation, data, time, key) {
                 self.sent = true;
                 if key {
                     self.keyframe = false;
                 }
+                let finished = Instant::now();
+                if was_refinement {
+                    if self.refinement.should_continue(Some(encoded_len), small_frame_size) {
+                        self.refinement.schedule_next(finished, self.settings.fps);
+                    } else if let Some(encoder) = &mut self.encoder {
+                        encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                    }
+                } else {
+                    if let Some(encoder) = &mut self.encoder {
+                        encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                    }
+                    self.refinement.schedule_initial(finished);
+                }
             } else {
                 self.keyframe = true;
+                self.refinement.cancel();
+                if let Some(encoder) = &mut self.encoder {
+                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
+                }
             }
         }
         Ok(())
@@ -646,19 +836,21 @@ impl Capture {
         self.video_dirty = true;
         Ok(())
     }
-    /// None is idle; Some(false) updates only the pointer; Some(true) replaces
-    /// the desktop background as well. This avoids rescaling for cursor moves.
-    fn acquire(&mut self) -> windows::core::Result<Option<bool>> {
+    fn acquire(&mut self) -> windows::core::Result<AcquireUpdate> {
         // SAFETY: every acquired frame and mapped texture is released on all paths.
         unsafe {
             let duplication = self.duplication.as_ref().ok_or_else(windows::core::Error::from_thread)?;
             let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
             let mut resource = None;
             match duplication.AcquireNextFrame(1, &mut info, &mut resource) {
-                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(None),
+                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(AcquireUpdate::Idle),
                 result => result?,
             }
             let result = (|| {
+                if info.LastPresentTime == 0 && info.LastMouseUpdateTime == 0 && !self.raw.is_empty() {
+                    return Ok(AcquireUpdate::Idle);
+                }
+                let previous_cursor = self.last_cursor_rect;
                 if info.LastMouseUpdateTime != 0 {
                     self.pointer = info.PointerPosition;
                 }
@@ -672,64 +864,148 @@ impl Capture {
                         &mut self.cursor_info,
                     )?;
                 }
+                let monitor = self.output.info();
+                let next_cursor = if self.pointer.Visible.as_bool() {
+                    pixels::cursor_rect(
+                        self.size,
+                        (monitor.width, monitor.height),
+                        self.pointer.Position.x,
+                        self.pointer.Position.y,
+                        self.cursor_info.Width as usize,
+                        self.cursor_info.Height as usize,
+                        self.cursor_info.Type,
+                    )
+                } else {
+                    None
+                };
+                self.last_cursor_rect = next_cursor;
+                let cursor_damage = match (previous_cursor, next_cursor) {
+                    (Some(a), Some(b)) => Some(a.union(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                };
                 let desktop_changed = info.LastPresentTime != 0
                     || (info.LastMouseUpdateTime != 0 && !info.PointerPosition.Visible.as_bool())
                     || self.raw.is_empty();
-                if desktop_changed {
-                    let texture: ID3D11Texture2D = resource.ok_or_else(windows::core::Error::from_thread)?.cast()?;
-                    let mut desc = D3D11_TEXTURE2D_DESC::default();
-                    texture.GetDesc(&mut desc);
-                    if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
-                        || desc.Width == 0
-                        || desc.Height == 0
-                        || u64::from(desc.Width) * u64::from(desc.Height) > 67_108_864
-                    {
-                        return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004005u32 as i32)));
-                    }
-                    let monitor = self.output.info();
-                    if !pixels::texture_matches(
-                        (monitor.width, monitor.height),
-                        self.output.desc.Rotation.0 as u32,
-                        (desc.Width, desc.Height),
-                    ) {
-                        // Some drivers resize a duplication before notifying
-                        // ACCESS_LOST. Never stretch it using stale geometry.
-                        return Err(windows::core::Error::from_hresult(DXGI_ERROR_ACCESS_LOST));
-                    }
-                    if self.texture_size != (desc.Width, desc.Height) {
-                        desc.Usage = D3D11_USAGE_STAGING;
-                        desc.BindFlags = 0;
-                        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-                        desc.MiscFlags = 0;
-                        let mut staging = None;
-                        self.device.CreateTexture2D(&desc, None, Some(&mut staging))?;
-                        self.staging = staging;
-                        self.texture_size = (desc.Width, desc.Height);
-                        self.resizer = Some(pixels::Resizer::new(
-                            (desc.Width as usize, desc.Height as usize),
-                            self.size,
-                            self.output.desc.Rotation.0 as u32,
-                        ));
-                    }
-                    let staging = self.staging.as_ref().ok_or_else(windows::core::Error::from_thread)?;
-                    self.context.CopyResource(staging, &texture);
-                    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                    self.context.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-                    if mapped.pData.is_null() || mapped.RowPitch < desc.Width * 4 {
-                        self.context.Unmap(staging, 0);
-                        return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004005u32 as i32)));
-                    }
-                    self.raw.resize(desc.Width as usize * desc.Height as usize * 4, 0);
-                    for y in 0..desc.Height as usize {
-                        let row = std::slice::from_raw_parts(
-                            mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize),
-                            desc.Width as usize * 4,
-                        );
-                        self.raw[y * desc.Width as usize * 4..(y + 1) * desc.Width as usize * 4].copy_from_slice(row);
-                    }
-                    self.context.Unmap(staging, 0);
+                if !desktop_changed {
+                    return Ok(match cursor_damage {
+                        Some(dirty) => AcquireUpdate::CursorOnly { dirty: Some(dirty) },
+                        None => AcquireUpdate::Idle,
+                    });
                 }
-                Ok(Some(desktop_changed))
+                let had_raw = !self.raw.is_empty();
+                let texture: ID3D11Texture2D = resource.ok_or_else(windows::core::Error::from_thread)?.cast()?;
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                texture.GetDesc(&mut desc);
+                if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+                    || desc.Width == 0
+                    || desc.Height == 0
+                    || u64::from(desc.Width) * u64::from(desc.Height) > 67_108_864
+                {
+                    return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004005u32 as i32)));
+                }
+                let rotation = self.output.desc.Rotation.0 as u32;
+                if !pixels::texture_matches((monitor.width, monitor.height), rotation, (desc.Width, desc.Height)) {
+                    // Some drivers resize a duplication before notifying
+                    // ACCESS_LOST. Never stretch it using stale geometry.
+                    return Err(windows::core::Error::from_hresult(DXGI_ERROR_ACCESS_LOST));
+                }
+                let mut dirty: Option<pixels::PixelRect> = None;
+                let collect_patches = self.settings.original
+                    && self.settings.patches
+                    && had_raw
+                    && self.texture_size == (desc.Width, desc.Height)
+                    && info.TotalMetadataBufferSize > 0
+                    && info.TotalMetadataBufferSize <= 4 * 1024 * 1024;
+                if collect_patches {
+                    let total = info.TotalMetadataBufferSize as usize;
+                    let move_cap = total / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() + 1;
+                    self.move_buf.resize(move_cap, DXGI_OUTDUPL_MOVE_RECT::default());
+                    let mut move_bytes = 0u32;
+                    let moves_ok = duplication
+                        .GetFrameMoveRects(
+                            (self.move_buf.len() * std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>()) as u32,
+                            self.move_buf.as_mut_ptr(),
+                            &mut move_bytes,
+                        )
+                        .is_ok();
+                    let dirty_cap = total / std::mem::size_of::<RECT>() + 1;
+                    self.dirty_buf.resize(dirty_cap, RECT::default());
+                    let mut dirty_bytes = 0u32;
+                    let dirty_ok = duplication
+                        .GetFrameDirtyRects(
+                            (self.dirty_buf.len() * std::mem::size_of::<RECT>()) as u32,
+                            self.dirty_buf.as_mut_ptr(),
+                            &mut dirty_bytes,
+                        )
+                        .is_ok();
+                    if moves_ok && dirty_ok {
+                        let move_count = move_bytes as usize / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>();
+                        let dirty_count = dirty_bytes as usize / std::mem::size_of::<RECT>();
+                        let mut union = cursor_damage;
+                        for mv in &self.move_buf[..move_count.min(self.move_buf.len())] {
+                            let d = mv.DestinationRect;
+                            let w = d.right.saturating_sub(d.left);
+                            let h = d.bottom.saturating_sub(d.top);
+                            for rect in [
+                                (d.left, d.top, d.right, d.bottom),
+                                (
+                                    mv.SourcePoint.x,
+                                    mv.SourcePoint.y,
+                                    mv.SourcePoint.x.saturating_add(w),
+                                    mv.SourcePoint.y.saturating_add(h),
+                                ),
+                            ] {
+                                if let Some(mapped) =
+                                    pixels::transform_texture_rect(rect, (desc.Width, desc.Height), rotation, self.size)
+                                {
+                                    union = Some(union.map_or(mapped, |u| u.union(mapped)));
+                                }
+                            }
+                        }
+                        for r in &self.dirty_buf[..dirty_count.min(self.dirty_buf.len())] {
+                            if let Some(mapped) = pixels::transform_texture_rect(
+                                (r.left, r.top, r.right, r.bottom),
+                                (desc.Width, desc.Height),
+                                rotation,
+                                self.size,
+                            ) {
+                                union = Some(union.map_or(mapped, |u| u.union(mapped)));
+                            }
+                        }
+                        dirty = union;
+                    }
+                }
+                if self.texture_size != (desc.Width, desc.Height) {
+                    desc.Usage = D3D11_USAGE_STAGING;
+                    desc.BindFlags = 0;
+                    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+                    desc.MiscFlags = 0;
+                    let mut staging = None;
+                    self.device.CreateTexture2D(&desc, None, Some(&mut staging))?;
+                    self.staging = staging;
+                    self.texture_size = (desc.Width, desc.Height);
+                    self.resizer =
+                        Some(pixels::Resizer::new((desc.Width as usize, desc.Height as usize), self.size, rotation));
+                }
+                let staging = self.staging.as_ref().ok_or_else(windows::core::Error::from_thread)?;
+                self.context.CopyResource(staging, &texture);
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                self.context.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+                if mapped.pData.is_null() || mapped.RowPitch < desc.Width * 4 {
+                    self.context.Unmap(staging, 0);
+                    return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004005u32 as i32)));
+                }
+                self.raw.resize(desc.Width as usize * desc.Height as usize * 4, 0);
+                for y in 0..desc.Height as usize {
+                    let row = std::slice::from_raw_parts(
+                        mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize),
+                        desc.Width as usize * 4,
+                    );
+                    self.raw[y * desc.Width as usize * 4..(y + 1) * desc.Width as usize * 4].copy_from_slice(row);
+                }
+                self.context.Unmap(staging, 0);
+                Ok(AcquireUpdate::Desktop { dirty })
             })();
             let release = duplication.ReleaseFrame();
             result.and_then(|changed| release.map(|_| changed))

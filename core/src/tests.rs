@@ -1935,8 +1935,7 @@ fn screen_approval_expires_without_native_interaction() {
     });
 }
 
-#[test]
-fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_cleanly() {
+fn check_hd_transfer(patches: bool) {
     use std::time::Instant;
     use str0m::change::SdpAnswer;
     use str0m::net::{Protocol, Receive};
@@ -1968,7 +1967,7 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
         let mut change = receiver.sdp_api();
         change.add_channel("cmdpalm.original".into());
         let (offer, pending) = change.apply().unwrap();
-        send(&mut ws, json!({"t":"displayStart", "id":2, "displayId":"test", "quality":"original", "sdp":offer.to_sdp_string()})).await;
+        send(&mut ws, json!({"t":"displayStart", "id":2, "displayId":"test", "quality":"original", "patches":patches, "sdp":offer.to_sdp_string()})).await;
         let answer = loop {
             let state = recv_kind(&mut ws, "displayState").await;
             assert_ne!(state["state"], "error", "{state}");
@@ -1978,16 +1977,31 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
         // Larger than the SCTP send buffer: correct delivery requires the
         // sender to honor backpressure rather than enqueueing a whole frame.
         let image: Vec<u8> = (0..300_000).map(|i| (i * 31 + i / 7) as u8).collect();
-        // Both arrive while the first picture is in flight. A still screen
-        // sends nothing more, so the phone must end on the newest one.
         let skipped: Vec<u8> = image.iter().map(|byte| byte ^ 0x55).collect();
         let newest: Vec<u8> = image.iter().rev().copied().collect();
-        let mut pictures: Vec<Vec<u8>> = Vec::new();
+        let patch: Vec<u8> = {
+            let mut body = Vec::with_capacity(24 + 4096);
+            body.extend_from_slice(&12u32.to_le_bytes());
+            body.extend_from_slice(&34u32.to_le_bytes());
+            body.extend_from_slice(&64u32.to_le_bytes());
+            body.extend_from_slice(&64u32.to_le_bytes());
+            body.extend_from_slice(&1920u32.to_le_bytes());
+            body.extend_from_slice(&1080u32.to_le_bytes());
+            body.extend((0..4096).map(|i| (i * 17) as u8));
+            body
+        };
+        let mut pictures: Vec<([u8; 4], Vec<u8>)> = Vec::new();
         let mut received = Vec::new();
+        let mut current_magic = [0u8; 4];
+        let mut expected_len = 0usize;
         let mut buffer = [0; 2048];
         let mut pulse = tokio::time::interval(Duration::from_millis(20));
-        let began = Instant::now(); let mut generation = None; let mut sent = false;
-        while pictures.len() < 2 {
+        let began = Instant::now();
+        let mut generation = None;
+        let mut sent = false;
+        let mut queued_patch = false;
+        let target = if patches { 3 } else { 2 };
+        while pictures.len() < target {
             assert!(began.elapsed() < Duration::from_secs(12), "HD picture transfer stalled at {} bytes", received.len());
             let deadline = loop {
                 match receiver.poll_output().unwrap() {
@@ -1995,16 +2009,32 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
                     Output::Transmit(packet) => { socket.send_to(&packet.contents, packet.destination).await.unwrap(); }
                     Output::Event(Event::ChannelData(data)) => {
                         assert!(data.binary); assert!(data.data.len() <= 16 * 1024);
-                        assert_eq!(&data.data[..4], b"CPNG");
-                        assert_eq!(u32::from_le_bytes(data.data[8..12].try_into().unwrap()) as usize, image.len());
-                        assert_eq!(u32::from_le_bytes(data.data[12..16].try_into().unwrap()) as usize, received.len());
+                        let magic: [u8; 4] = data.data[..4].try_into().unwrap();
+                        assert!(magic == *b"CPNG" || (patches && magic == *b"CPAT"), "unexpected magic {magic:?}");
+                        let total = u32::from_le_bytes(data.data[8..12].try_into().unwrap()) as usize;
+                        let offset = u32::from_le_bytes(data.data[12..16].try_into().unwrap()) as usize;
+                        if offset == 0 {
+                            current_magic = magic;
+                            expected_len = total;
+                            received.clear();
+                        }
+                        assert_eq!(magic, current_magic);
+                        assert_eq!(total, expected_len);
+                        assert_eq!(offset, received.len());
                         if pictures.is_empty() && received.is_empty() {
                             let generation = generation.unwrap();
                             assert!(f.host.display_frame(session, generation, skipped.clone(), 1, true));
                             assert!(f.host.display_frame(session, generation, newest.clone(), 2, true));
                         }
                         received.extend_from_slice(&data.data[16..]);
-                        if received.len() == image.len() { pictures.push(std::mem::take(&mut received)); }
+                        if received.len() == expected_len {
+                            pictures.push((current_magic, std::mem::take(&mut received)));
+                            if patches && pictures.len() == 2 && !queued_patch {
+                                let generation = generation.unwrap();
+                                assert!(f.host.try_display_frame(session, generation, patch.clone(), 3, false).is_ok());
+                                queued_patch = true;
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -2017,8 +2047,9 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
                 _ = pulse.tick() => {
                     send(&mut ws, json!({"t":"displayAlive", "id":2})).await;
                     generation = f.delegate.display_commands.lock().unwrap().iter().find_map(|(_, command)| {
-                        if let DisplayCommand::Start { generation, original: true, max_dimension, fps, .. } = command {
-                            assert_eq!((*max_dimension, *fps), (3840, 1)); Some(*generation)
+                        if let DisplayCommand::Start { generation, original: true, max_dimension, fps, patches: cmd_patches, .. } = command {
+                            assert_eq!((*max_dimension, *fps, *cmd_patches), (3840, 4, patches));
+                            Some(*generation)
                         } else { None }
                     }).or(generation);
                     if !sent && let Some(generation) = generation { sent = f.host.display_frame(session, generation, image.clone(), 0, true); }
@@ -2032,13 +2063,29 @@ fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_
                 }
             }
         }
-        assert!(pictures[0] == image, "encrypted transport must preserve original picture bytes exactly");
-        assert!(pictures[1] != skipped, "a picture replaced while waiting must not be sent");
-        assert!(pictures[1] == newest, "the newest picture must follow the one in flight");
+        assert_eq!(pictures[0].0, *b"CPNG");
+        assert!(pictures[0].1 == image, "encrypted transport must preserve original picture bytes exactly");
+        assert_eq!(pictures[1].0, *b"CPNG");
+        assert!(pictures[1].1 != skipped, "a picture replaced while waiting must not be sent");
+        assert!(pictures[1].1 == newest, "the newest picture must follow the one in flight");
+        if patches {
+            assert_eq!(pictures[2].0, *b"CPAT");
+            assert!(pictures[2].1 == patch, "a negotiated patch must follow its base picture intact");
+        }
         send(&mut ws, json!({"t":"displayStop", "id":2})).await;
         loop { if recv_kind(&mut ws, "displayState").await["state"] == "stopped" { break; } }
         assert!(!f.host.display_frame(session, generation.unwrap(), image, 1, true));
     });
+}
+
+#[test]
+fn original_pictures_cross_encrypted_data_channels_with_bounded_chunks_and_stop_cleanly() {
+    check_hd_transfer(false);
+}
+
+#[test]
+fn negotiated_hd_patches_follow_their_base_picture_over_the_data_channel() {
+    check_hd_transfer(true);
 }
 
 #[test]

@@ -185,14 +185,43 @@ pub trait HostDelegate: Send + Sync {
     fn display_command(&self, session: u64, command: DisplayCommand);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DisplayProfile {
+    #[default]
+    ConstrainedBaseline,
+    Main,
+    ConstrainedHigh,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
-    List { request_id: u32 },
-    Start { generation: u64, display_id: String, max_dimension: u32, fps: u32, bitrate: u32, original: bool },
-    Configure { generation: u64, fps: u32, bitrate: u32 },
-    KeyFrame { generation: u64 },
-    Focus { generation: u64 },
-    Stop { generation: u64 },
+    List {
+        request_id: u32,
+    },
+    Start {
+        generation: u64,
+        display_id: String,
+        max_dimension: u32,
+        fps: u32,
+        bitrate: u32,
+        original: bool,
+        patches: bool,
+        profile: DisplayProfile,
+    },
+    Configure {
+        generation: u64,
+        fps: u32,
+        bitrate: u32,
+    },
+    KeyFrame {
+        generation: u64,
+    },
+    Focus {
+        generation: u64,
+    },
+    Stop {
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
