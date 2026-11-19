@@ -1,6 +1,6 @@
 import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SettingsSheet from '../src/components/SettingsSheet.vue'
 import { state } from '../src/lib/connection'
 import { resetSettings, settings } from '../src/lib/settings'
@@ -30,15 +30,19 @@ beforeEach(() => {
   mount(SettingsSheet, { attachTo: document.body })
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 describe('phone settings', () => {
-  it('shows connection facts and opens every feature tab with legacy preferences', async () => {
+  it('shows connection facts and opens every feature tab without legacy advanced toggles', async () => {
     expect(sheet().querySelector('section.card')?.textContent).toContain('Studio PC')
-    expect(sheet().querySelector('section.card')?.textContent).toContain('WinPalm 0.3.2 · 7 ms')
-    expect(sheet().querySelector('section.card')?.textContent).toContain('Connected')
-    expect(sheet().querySelector('section.card')?.textContent).not.toMatch(/HTTPS|encrypted/i)
+    expect(sheet().querySelector('section.card')?.textContent).toContain('WinPalm 0.3.2 · Connected · 7 ms')
+    expect(sheet().querySelector('section.card')?.textContent).toContain('Not encrypted')
+    expect(sheet().querySelector('section.card')?.textContent).toContain('Others on this Wi-Fi')
     expect(sheet().querySelectorAll('[role="tab"]')).toHaveLength(5)
     expect(sheet().textContent).not.toContain('Show advanced settings')
-    expect(buildPayload().settings.showAdvanced).toBe(false)
+    expect(buildPayload().settings).not.toHaveProperty('showAdvanced')
     expect(panel().querySelector('[aria-label="Acceleration"]')).not.toBeNull()
     expect(panel().querySelector('[aria-label="Hold to keep scrolling"]')).not.toBeNull()
     await select('Keyboard')
@@ -56,6 +60,39 @@ describe('phone settings', () => {
     await select('Deck')
     expect(panel().querySelector('[aria-label="Button size"]')).not.toBeNull()
     expect(settings.tab).toBe('trackpad')
+  })
+
+  it('shows encryption status and tailored voice typing setup guidance for each connection and feature state', async () => {
+    const hostCard = () => sheet().querySelector<HTMLElement>('section.card')!
+    expect(hostCard().textContent).toContain('Not encrypted')
+    expect(hostCard().textContent).toContain('Others on this Wi-Fi')
+
+    await select('Keyboard')
+    const panelText = () => panel().textContent!
+    expect(panelText()).toContain('trusted HTTPS connection')
+    expect(panelText()).toContain('Enable local voice typing')
+
+    state.features.voice = true
+    await nextTick()
+    expect(panelText()).toContain('Phone setup → Encrypted HTTPS & Voice Typing')
+    expect(panelText()).not.toContain('Enable local voice typing')
+
+    state.features.secure = true
+    state.features.voice = false
+    await nextTick()
+    expect(hostCard().textContent).toContain('Encrypted')
+    expect(hostCard().textContent).not.toContain('Not encrypted')
+    expect(hostCard().textContent).not.toContain('Others on this Wi-Fi')
+    expect(panelText()).toContain('Check setup')
+
+    state.features.voice = true
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('navigator', { ...navigator, mediaDevices: { getUserMedia: vi.fn() } })
+    vi.stubGlobal('AudioWorkletNode', class {})
+    document.body.innerHTML = ''
+    mount(SettingsSheet, { attachTo: document.body })
+    await select('Keyboard')
+    expect(panelText()).toContain('Voice typing is ready')
   })
 
   it('lets the keyboard select tabs and Escape close only the gesture editor', async () => {

@@ -146,4 +146,66 @@ describe('MediaView', () => {
     expect(mediaSent(socket)).toHaveLength(atPause)
     stop()
   })
+
+  it('leaves Tab, Shift+Tab and button activation to the browser and forwards modified Tab and letters', async () => {
+    const { socket, view } = await mediaView()
+    const { installHardwareKeyboard } = await import('../src/lib/hardware')
+    const { Key } = await import('../src/lib/keys')
+    installHardwareKeyboard()
+    const previous = view.find('button[aria-label="Previous track"]').element as HTMLButtonElement
+    const play = view.find('button[aria-label="Play or pause"]').element as HTMLButtonElement
+    previous.focus()
+
+    const forwardDown = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true, cancelable: true })
+    previous.dispatchEvent(forwardDown)
+    previous.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', bubbles: true, cancelable: true }))
+    expect(forwardDown.defaultPrevented).toBe(false)
+    play.focus()
+    expect(socket.sent.filter((m) => m.t === 'key')).toEqual([])
+
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
+    play.dispatchEvent(enter)
+    const space = new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true })
+    play.dispatchEvent(space)
+    expect(enter.defaultPrevented).toBe(false)
+    expect(space.defaultPrevented).toBe(false)
+    expect(socket.sent.filter((m) => m.t === 'key')).toEqual([])
+
+    const backwardDown = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    play.dispatchEvent(backwardDown)
+    play.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(backwardDown.defaultPrevented).toBe(false)
+    previous.focus()
+    expect(socket.sent.filter((m) => m.t === 'key')).toEqual([])
+
+    const altTab = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', altKey: true, bubbles: true, cancelable: true })
+    previous.dispatchEvent(altTab)
+    previous.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', altKey: true, bubbles: true, cancelable: true }))
+    expect(altTab.defaultPrevented).toBe(true)
+    expect(socket.sent.filter((m) => m.t === 'key')).toMatchObject([
+      { code: Key.Tab, down: true },
+      { code: Key.Tab, down: false },
+    ])
+
+    socket.sent.length = 0
+    const letter = new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true })
+    play.dispatchEvent(letter)
+    expect(letter.defaultPrevented).toBe(true)
+    expect(socket.sent.filter((m) => m.t === 'key')).toMatchObject([{ code: Key.A, down: true }])
+
+    installHardwareKeyboard()
+    expect(socket.sent.filter((m) => m.t === 'key')).toMatchObject([
+      { code: Key.A, down: true },
+      { code: Key.A, down: false },
+    ])
+
+    document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true }))
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', bubbles: true, cancelable: true }))
+    expect(socket.sent.filter((m) => m.t === 'key')).toMatchObject([
+      { code: Key.A, down: true },
+      { code: Key.A, down: false },
+      { code: Key.B, down: true },
+    ])
+    view.unmount()
+  })
 })
