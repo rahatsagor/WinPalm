@@ -236,6 +236,10 @@ fn dispatch(request: Value) -> Result<Value, String> {
             host.permission_changed();
             Ok(Value::Null)
         }
+        "networkChanged" => {
+            host.network_changed();
+            Ok(Value::Null)
+        }
         "voiceUpdate" => {
             host.voice_update(
                 id(),
