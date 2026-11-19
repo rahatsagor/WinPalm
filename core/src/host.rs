@@ -1154,6 +1154,18 @@ impl CoreHost {
         self.shared.displays.frame(&self.shared, session, generation, data, timestamp_us, keyframe)
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn try_display_frame(
+        &self,
+        session: u64,
+        generation: u64,
+        data: Vec<u8>,
+        timestamp_us: u64,
+        keyframe: bool,
+    ) -> Result<(), Vec<u8>> {
+        self.shared.displays.try_frame(&self.shared, session, generation, data, timestamp_us, keyframe)
+    }
+
     pub fn display_capture_active(&self, session: u64, generation: u64) -> bool {
         self.shared.displays.capture_active(&self.shared, session, generation)
     }
