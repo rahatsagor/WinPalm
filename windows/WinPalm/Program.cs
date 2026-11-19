@@ -36,14 +36,25 @@ internal static class Program
         catch (AbandonedMutexException) { first = true; }
         if (!first) return 0;
       }
+      var completingUpdate = args.Contains("--complete-update");
+      string? completedId = null;
+      if (completingUpdate)
+      {
+        if (args is not ["--complete-update", var id]) throw new InvalidDataException("The update identifier is missing.");
+        completedId = id;
+      }
       var preferences = Preferences.Load(); Preferences.KeepLoginPathCurrent(); CoreBridge.Initialize();
       UpdateInstaller.CleanOldStages();
-      using var context = new HostContext(preferences, args.Contains("--start-minimized"));
-      Preferences.KeepInstalledVersionCurrent();
-      if (args is ["--complete-update", var completedId])
+      var minimized = args.Contains("--start-minimized");
+      using var context = new HostContext(preferences, minimized, completingUpdate);
+      if (completedId is not null)
       {
-        if (!CoreBridge.Call(new { op = "status" }).GetProperty("running").GetBoolean()) throw new InvalidOperationException("The updated server could not start.");
-        UpdateInstaller.Complete(completedId);
+        CompleteUpdate(completedId);
+        if (!minimized) context.ShowWindow();
+      }
+      else
+      {
+        Preferences.KeepInstalledVersionCurrent();
       }
       var listener = ThreadPool.RegisterWaitForSingleObject(show, (_, _) => context.ShowFromAnotherThread(), null, Timeout.Infinite, false);
       var quitListener = ThreadPool.RegisterWaitForSingleObject(quit, (_, _) => context.QuitFromAnotherThread(), null, Timeout.Infinite, false);
@@ -66,6 +77,13 @@ internal static class Program
       MessageBox.Show($"WinPalm couldn't start.\n\n{error.Message}\n\nMake sure the complete package was extracted, including winpalm_core.dll and the web folder.", "WinPalm", MessageBoxButtons.OK, MessageBoxIcon.Error);
       return 1;
     }
+  }
+
+  private static void CompleteUpdate(string completedId)
+  {
+    if (!CoreBridge.Call(new { op = "status" }).GetProperty("running").GetBoolean()) throw new InvalidOperationException("The updated server could not start.");
+    UpdateInstaller.Complete(completedId);
+    Preferences.KeepInstalledVersionCurrent();
   }
 
   /// The installer waits for this user's existing instance to release its

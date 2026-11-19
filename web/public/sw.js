@@ -6,6 +6,14 @@
 const CACHE = 'winpalm-shell'
 const OFFLINE = '/offline.html'
 
+const isShellPath = (pathname) => pathname === '/' || pathname === '/index.html'
+const isBypassedPath = (pathname) =>
+  pathname.startsWith('/api/') ||
+  pathname === '/ws' ||
+  pathname === '/winpalm.crt' ||
+  pathname === '/source.zip' ||
+  pathname === '/LICENSE.txt'
+
 const assetsOf = (html) => Array.from(html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)/g), (m) => m[1])
 
 // The page first loads before this worker controls it, so its files were
@@ -30,10 +38,12 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 // the previous build's assets; this build's lazy chunks are cached again as
 // they load.
 async function store(request, response) {
+  const pathname = new URL(request.url).pathname
+  if (isBypassedPath(pathname)) return
   const cache = await caches.open(CACHE)
-  if (request.mode !== 'navigate') return cache.put(request, response)
+  if (request.mode !== 'navigate' || !isShellPath(pathname)) return cache.put(request, response)
   const html = await response.clone().text()
-  const previous = await cache.match(request)
+  const previous = (await cache.match(request)) ?? (pathname === '/index.html' ? await cache.match('/') : undefined)
   await cache.put(request, response)
   if (!previous || (await previous.text()) === html) return
   const keep = new Set(assetsOf(html))
@@ -96,6 +106,6 @@ self.addEventListener('fetch', (event) => {
   const request = event.request
   const url = new URL(request.url)
   if (request.method !== 'GET' || url.origin !== location.origin) return
-  if (url.pathname.startsWith('/api/') || url.pathname === '/ws' || url.pathname === '/winpalm.crt') return
+  if (isBypassedPath(url.pathname)) return
   event.respondWith(respond(event))
 })

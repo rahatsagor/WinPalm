@@ -10,7 +10,12 @@
     <Content Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../WinPalm/Services/BundledNotices.cs" Link="Services/BundledNotices.cs" />
     <Compile Include="../WinPalm/Services/ClipboardRestore.cs" Link="Services/ClipboardRestore.cs" />
+    <Compile Include="../WinPalm/Services/Diagnostics.cs" Link="Services/Diagnostics.cs" />
+    <Compile Include="../WinPalm/Services/NetworkCheck.cs" Link="Services/NetworkCheck.cs" />
+    <Compile Include="../WinPalm/Services/Preferences.cs" Link="Services/Preferences.cs" />
     <Compile Include="../WinPalm/Services/ReleaseUpdates.cs" Link="Services/ReleaseUpdates.cs" />
+    <Compile Include="../WinPalm/Services/UpdateController.cs" Link="Services/UpdateController.cs" />
+    <Compile Include="../WinPalm/Services/UpdateInstaller.cs" Link="Services/UpdateInstaller.cs" />
     <Compile Include="../WinPalm/Services/UpdatePackage.cs" Link="Services/UpdatePackage.cs" />
     <Compile Include="../WinPalm/Services/PcmAudioStream.cs" Link="Services/PcmAudioStream.cs" />
     <Compile Include="../WinPalm/Services/ActivationWait.cs" Link="Services/ActivationWait.cs" />

@@ -85,15 +85,32 @@ internal static class UpdateInstaller
     }
     if (!File.Exists(Path.Combine(stage, "apply"))) return 1;
     if (!previous.WaitForExit(45000)) throw new IOException("WinPalm is still running. Close it and try the update again.");
+    return InstallAndVerify(
+      id,
+      stage,
+      payload,
+      target,
+      () =>
+      {
+        var info = new ProcessStartInfo(currentExe) { UseShellExecute = false, WorkingDirectory = target };
+        info.ArgumentList.Add("--complete-update"); info.ArgumentList.Add(id);
+        return Process.Start(info);
+      },
+      () =>
+      {
+        using var _ = Process.Start(new ProcessStartInfo(currentExe) { UseShellExecute = true, WorkingDirectory = target });
+      });
+  }
+
+  internal static int InstallAndVerify(string id, string stage, string payload, string target, Func<Process?> startUpdated, Action startRestored, int maxPolls = 450, int pollIntervalMs = 100)
+  {
     var backup = Path.Combine(target, ".winpalm-backup-" + id);
     Process? restarted = null;
     try
     {
       UpdatePackage.Install(payload, target, backup);
-      var info = new ProcessStartInfo(currentExe) { UseShellExecute = false, WorkingDirectory = target };
-      info.ArgumentList.Add("--complete-update"); info.ArgumentList.Add(id);
-      restarted = Process.Start(info) ?? throw new IOException("WinPalm could not restart.");
-      for (var i = 0; i < 450; i++)
+      restarted = startUpdated() ?? throw new IOException("WinPalm could not restart.");
+      for (var i = 0; i < maxPolls; i++)
       {
         if (File.Exists(Path.Combine(stage, "success")))
         {
@@ -101,7 +118,7 @@ internal static class UpdateInstaller
           File.WriteAllText(Path.Combine(stage, "finished"), "success"); return 0;
         }
         if (restarted.HasExited) throw new IOException("The updated WinPalm could not start. The previous version has been restored.");
-        Thread.Sleep(100);
+        Thread.Sleep(pollIntervalMs);
       }
       // Do not kill a live app which may already be controlling input.
       throw new TimeoutException("WinPalm restarted but did not confirm the update. Its previous files are kept in " + backup);
@@ -109,10 +126,21 @@ internal static class UpdateInstaller
     catch (Exception error) when (error is not TimeoutException && (restarted is null || restarted.HasExited))
     {
       if (Directory.Exists(backup)) UpdatePackage.RollBack(target, backup);
-      Process.Start(new ProcessStartInfo(currentExe) { UseShellExecute = true, WorkingDirectory = target });
+      startRestored();
       throw;
     }
     finally { restarted?.Dispose(); }
+  }
+
+  internal static void RunStartup(Action start, Action<Exception> record, Action<Exception> showModal, bool completingUpdate)
+  {
+    try { start(); }
+    catch (Exception error)
+    {
+      record(error);
+      if (completingUpdate) throw;
+      showModal(error);
+    }
   }
 
   internal static void Complete(string id)

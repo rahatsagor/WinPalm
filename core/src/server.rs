@@ -148,7 +148,7 @@ pub(crate) async fn start(shared: Arc<Shared>, shutdown: watch::Receiver<bool>) 
 
     let addresses = lan_addresses();
     let names = identity_names(&shared, &addresses);
-    let identity_due = next_identity_check(refresh_identity(&shared, names.clone()).await);
+    let identity_due = next_identity_check(refresh_identity(&shared).await);
 
     for listener in std::iter::once(v4).chain(v6) {
         tokio::spawn(accept_loop(shared.clone(), listener, shutdown.clone()));
@@ -159,23 +159,38 @@ pub(crate) async fn start(shared: Arc<Shared>, shutdown: watch::Receiver<bool>) 
 
 /// Names the server certificate must cover right now.
 fn identity_names(shared: &Shared, addresses: &[IpAddr]) -> Vec<String> {
-    tls::server_names(&shared.config().host_name, addresses)
+    let config = shared.config();
+    tls::server_names_with_custom(&config.host_name, crate::host::custom_host_name(&config).as_deref(), addresses)
 }
 
-/// Create or reissue the TLS certificate for `names`. Returns whether HTTPS
-/// is set up as well as it can be.
-async fn refresh_identity(shared: &Arc<Shared>, names: Vec<String>) -> bool {
+/// Create or reissue the TLS certificate synchronously for the current config
+/// and network addresses. Returns whether HTTPS is set up as well as it can be.
+pub(crate) fn refresh_identity_now(shared: &Shared) -> bool {
+    let _guard = shared.tls_lock.lock().unwrap_or_else(|p| p.into_inner());
     let Some(dir) = shared.data_dir() else { return true };
-    let result = tokio::task::spawn_blocking(move || tls::load_identity(&dir.join("tls"), &names)).await;
-    match result {
-        Ok(Ok(identity)) => {
+    let addresses = lan_addresses();
+    let names = identity_names(shared, &addresses);
+    match tls::load_identity(&dir.join("tls"), &names) {
+        Ok(identity) => {
             *shared.tls.write().unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(identity));
-            return true;
+            true
         }
-        Ok(Err(err)) => tracing::error!(%err, "HTTPS is unavailable"),
-        Err(err) => tracing::error!(%err, "certificate task failed"),
+        Err(err) => {
+            tracing::error!(%err, "HTTPS is unavailable");
+            false
+        }
     }
-    false
+}
+
+async fn refresh_identity(shared: &Arc<Shared>) -> bool {
+    let shared = shared.clone();
+    match tokio::task::spawn_blocking(move || refresh_identity_now(&shared)).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            tracing::error!(%err, "certificate task failed");
+            false
+        }
+    }
 }
 
 /// When to look at the certificate again: soon after a failure, and every so
@@ -209,7 +224,7 @@ async fn housekeeping(
         let wanted = identity_names(&shared, &addresses);
         if wanted != names || Instant::now() >= identity_due {
             names = wanted;
-            identity_due = next_identity_check(refresh_identity(&shared, names.clone()).await);
+            identity_due = next_identity_check(refresh_identity(&shared).await);
         }
         if rotated || moved {
             shared.emit(HostEvent::PairingChanged);
@@ -331,12 +346,19 @@ impl Request {
         self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 
+    pub fn last_header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().rfind(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
     fn query(&self, name: &str) -> Option<&str> {
         self.query.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 
     fn header_has_token(&self, name: &str, token: &str) -> bool {
-        self.header(name).is_some_and(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)))
+        self.headers
+            .iter()
+            .filter(|(k, _)| k == name)
+            .any(|(_, v)| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)))
     }
 
     fn keep_alive(&self) -> bool {
@@ -408,7 +430,8 @@ pub(crate) fn parse_head(head: &[u8]) -> Option<Request> {
     }
     // A proxy in front could read a different copy of these than this server
     // does, which is how requests get smuggled past it.
-    for name in ["host", "content-length", "transfer-encoding"] {
+    for name in ["host", "origin", "content-length", "transfer-encoding", "sec-websocket-key", "sec-websocket-version"]
+    {
         if headers.iter().filter(|(k, _)| k == name).count() > 1 {
             return None;
         }
@@ -640,12 +663,11 @@ pub(crate) struct Client<'a> {
 
 pub(crate) fn client(request: &Request, peer: IpAddr, secure: bool, allow_proxy: bool) -> Client<'_> {
     let host = request.header("host");
-    // The last entry is the one added by the proxy that connected to us.
+    let last = |name: &'static str| request.last_header(name).and_then(|v| v.rsplit(',').next()).map(str::trim);
+    // The last entry of the last header line is the one added by the proxy that connected to us.
     let forwarded = (allow_proxy && peer.is_loopback())
-        .then(|| request.header("x-forwarded-for"))
+        .then(|| last("x-forwarded-for"))
         .flatten()
-        .and_then(|list| list.rsplit(',').next())
-        .map(str::trim)
         // Some proxies add the port: `10.0.0.9:51234` or `[fd00::9]:51234`.
         .and_then(|ip| ip.parse::<IpAddr>().ok().or_else(|| ip.parse::<SocketAddr>().ok().map(|a| a.ip())));
     let Some(address) = forwarded else {
@@ -653,11 +675,14 @@ pub(crate) fn client(request: &Request, peer: IpAddr, secure: bool, allow_proxy:
     };
     // Last entries here too: a proxy that appends would otherwise let the
     // phone pick the host used for the Host and Origin checks.
-    let last = |value: &'static str| request.header(value).map(|v| v.rsplit(',').next().unwrap_or(v).trim());
+    let forwarded_host = match last("x-forwarded-host") {
+        Some(h) => (!h.is_empty()).then_some(h),
+        None => host,
+    };
     Client {
         address: address.to_canonical(),
         secure: secure || last("x-forwarded-proto").is_some_and(|proto| proto.eq_ignore_ascii_case("https")),
-        host: last("x-forwarded-host").filter(|h| !h.is_empty()).or(host),
+        host: forwarded_host,
     }
 }
 
@@ -676,7 +701,11 @@ fn websocket_accept(request: &Request, host: &str) -> Result<String, Response> {
     let Some(key) = request.header("sec-websocket-key") else {
         return Err(Response::text(400, "Missing WebSocket key"));
     };
-    if let Some(origin) = request.header("origin") {
+    let mut origins = request.headers.iter().filter(|(k, _)| k == "origin").map(|(_, v)| v.as_str());
+    if let Some(origin) = origins.next() {
+        if origins.next().is_some() {
+            return Err(Response::text(400, "Duplicate Origin header"));
+        }
         let origin_host = origin.split_once("://").map(|(_, rest)| rest).unwrap_or(origin);
         if !origin_host.eq_ignore_ascii_case(host) {
             return Err(Response::text(403, "Cross-origin connections are not allowed"));
@@ -847,6 +876,12 @@ mod tests {
         assert!(parse_head(b"GET / SPDY/3\r\n").is_none());
         assert!(parse_head(b"GET / HTTP/1.1\r\nHost: mac.local\r\nHost: evil.example\r\n").is_none());
         assert!(
+            parse_head(
+                b"GET / HTTP/1.1\r\nHost: mac.local\r\nOrigin: http://mac.local\r\norigin: https://evil.example\r\n"
+            )
+            .is_none()
+        );
+        assert!(
             parse_head(b"GET / HTTP/1.1\r\nHost: mac.local\r\nContent-Length: 0\r\ncontent-length: 40\r\n").is_none()
         );
         assert_eq!(percent_decode("%41%2b"), Some("A+".into()));
@@ -876,5 +911,13 @@ mod tests {
         assert_eq!(websocket_accept(&evil, "mac.local:8790").unwrap_err().status, 403);
         let head = parse_head(base.replacen("GET", "HEAD", 1).as_bytes()).unwrap();
         assert_eq!(websocket_accept(&head, "mac.local:8790").unwrap_err().status, 405);
+        let mut duplicate_origin = parse_head(format!("{base}Origin: http://mac.local:8790\r\n").as_bytes()).unwrap();
+        duplicate_origin.headers.push(("origin".into(), "https://evil.example".into()));
+        assert_eq!(websocket_accept(&duplicate_origin, "mac.local:8790").unwrap_err().status, 400);
+        let split_connection = parse_head(
+            b"GET /ws HTTP/1.1\r\nHost: mac.local:8790\r\nUpgrade: websocket\r\nConnection: keep-alive\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: http://mac.local:8790\r\n",
+        )
+        .unwrap();
+        assert_eq!(websocket_accept(&split_connection, "mac.local:8790").unwrap(), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
 }

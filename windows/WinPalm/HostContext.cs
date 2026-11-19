@@ -12,55 +12,72 @@ internal sealed class HostContext : ApplicationContext
   internal JsonElement Snapshot { get; private set; }
   /// Set on the UI thread from background checks; shown on Connect.
   internal NetworkCheck.Problem? NetworkProblem { get; private set; }
-  private readonly MainWindow window;
-  private readonly NotifyIcon tray;
-  private readonly System.Windows.Forms.Timer timer;
+  private MainWindow? window;
+  private NotifyIcon? tray;
+  private System.Windows.Forms.Timer? timer;
   private readonly Dictionary<ulong, ApprovalWindow> approvals = [];
   private readonly Dictionary<ulong, ApprovalWindow> displayApprovals = [];
   /// Lock and sleep arrive on the SystemEvents thread, unlock on the UI thread.
   private readonly object lockGate = new();
   private readonly ControlPauseState automaticPause = new();
   private bool AutomaticallyPaused { get { lock (lockGate) return automaticPause.Active; } }
-  private readonly ToolStripMenuItem statusItem;
-  private readonly ToolStripMenuItem pauseItem;
-  private readonly ToolStripMenuItem updateItem;
+  private ToolStripMenuItem? statusItem;
+  private ToolStripMenuItem? pauseItem;
+  private ToolStripMenuItem? updateItem;
   private bool busy, quitting;
   private nint lastLayout, lastForeground;
   private int ticks, checkingNetwork;
-  internal HostContext(Preferences preferences, bool minimized)
+  internal HostContext(Preferences preferences, bool minimized, bool completingUpdate = false)
   {
-    Preferences = preferences; Services = new(preferences); Updates = new(preferences); CoreBridge.Desktop = Services;
-    CoreBridge.Call(new { op = "create", config = Services.Config() });
-    window = new MainWindow(this); _ = window.Handle;
-    CoreBridge.Event = value => { if (!quitting && !window.IsDisposed) window.BeginInvoke(() => OnEvent(value)); };
-    var menu = new ContextMenuStrip { Font = Theme.Font(9.5f) };
-    Theme.StyleContextMenu(menu);
-    menu.Opening += (_, _) => { menu.Font = Theme.Font(9.5f); menu.Padding = Theme.Px(6, 6, 6, 6); };
-    statusItem = new ToolStripMenuItem("WinPalm · Starting") { Enabled = false };
-    menu.Items.Add(statusItem);
-    menu.Items.Add(new ToolStripSeparator());
-    menu.Items.Add("Open WinPalm", null, (_, _) => ShowWindow());
-    pauseItem = new("Pause control", null, (_, _) => TogglePause()); menu.Items.Add(pauseItem);
-    menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Restart server", null, (_, _) => Restart());
-    updateItem = new("Check for updates…", null, async (_, _) => { ShowWindow(); window.ShowUpdates(); await Updates.CheckAsync(); }); menu.Items.Add(updateItem);
-    menu.Items.Add(new ToolStripSeparator());
-    menu.Items.Add("Quit WinPalm", null, (_, _) => ExitThread());
-    tray = new NotifyIcon { Text = "WinPalm · Starting", Icon = window.Icon, ContextMenuStrip = menu, Visible = true };
-    tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
-    tray.BalloonTipClicked += (_, _) => { if (Updates.Available is not null) { ShowWindow(); window.ShowUpdates(); } };
-    Updates.Changed += () => { if (!quitting) { updateItem.Text = Updates.Available is { } release ? $"WinPalm {release.Version.ToString(3)} available…" : "Check for updates…"; window.UpdateUpdates(); } };
-    Updates.UpdateFound += () => { if (!quitting) tray.ShowBalloonTip(10000, "WinPalm update available", $"WinPalm {Updates.Available!.Version.ToString(3)} is ready. Open Updates to download and restart.", ToolTipIcon.Info); };
-    Updates.RestartRequested += Quit;
-    if (!Win32.RegisterHotKey(window.Handle, 1, 0x4003, 0x13)) tray.ShowBalloonTip(5000, "WinPalm", "Ctrl + Alt + Pause is already used by another app. Pause is available in the tray menu.", ToolTipIcon.Info);
-    SystemEvents.SessionSwitch += SessionChanged; SystemEvents.PowerModeChanged += PowerChanged;
-    SystemEvents.DisplaySettingsChanged += DisplaysChanged;
-    System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
-    RefreshSessionState();
-    Start(); CheckNetwork();
-    timer = new System.Windows.Forms.Timer { Interval = 2000 }; timer.Tick += async (_, _) => await Poll(); timer.Start();
-    if (!minimized) ShowWindow();
-    _ = Poll();
-    Updates.CheckWhenDue();
+    Preferences = preferences; Updates = new(preferences); Services = new(preferences);
+    try
+    {
+      CoreBridge.Desktop = Services;
+      CoreBridge.Call(new { op = "create", config = Services.Config() });
+      var liveWindow = new MainWindow(this);
+      window = liveWindow;
+      _ = liveWindow.Handle;
+      CoreBridge.Event = value => { if (!quitting && !liveWindow.IsDisposed) liveWindow.BeginInvoke(() => OnEvent(value)); };
+      var menu = new ContextMenuStrip { Font = Theme.Font(9.5f) };
+      Theme.StyleContextMenu(menu);
+      menu.Opening += (_, _) => { menu.Font = Theme.Font(9.5f); menu.Padding = Theme.Px(6, 6, 6, 6); };
+      var status = new ToolStripMenuItem("WinPalm · Starting") { Enabled = false };
+      statusItem = status;
+      menu.Items.Add(status);
+      menu.Items.Add(new ToolStripSeparator());
+      menu.Items.Add("Open WinPalm", null, (_, _) => ShowWindow());
+      var pause = new ToolStripMenuItem("Pause control", null, (_, _) => TogglePause());
+      pauseItem = pause;
+      menu.Items.Add(pause);
+      menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Restart server", null, (_, _) => Restart());
+      var update = new ToolStripMenuItem("Check for updates…", null, async (_, _) => { ShowWindow(); liveWindow.ShowUpdates(); await Updates.CheckAsync(); });
+      updateItem = update;
+      menu.Items.Add(update);
+      menu.Items.Add(new ToolStripSeparator());
+      menu.Items.Add("Quit WinPalm", null, (_, _) => ExitThread());
+      var icon = new NotifyIcon { Text = "WinPalm · Starting", Icon = liveWindow.Icon, ContextMenuStrip = menu, Visible = true };
+      tray = icon;
+      icon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
+      icon.BalloonTipClicked += (_, _) => { if (Updates.Available is not null) { ShowWindow(); liveWindow.ShowUpdates(); } };
+      Updates.Changed += () => { if (!quitting) { update.Text = Updates.Available is { } release ? $"WinPalm {release.Version.ToString(3)} available…" : "Check for updates…"; liveWindow.UpdateUpdates(); } };
+      Updates.UpdateFound += () => { if (!quitting) icon.ShowBalloonTip(10000, "WinPalm update available", $"WinPalm {Updates.Available!.Version.ToString(3)} is ready. Open Updates to download and restart.", ToolTipIcon.Info); };
+      Updates.RestartRequested += Quit;
+      if (!Win32.RegisterHotKey(liveWindow.Handle, 1, 0x4003, 0x13)) icon.ShowBalloonTip(5000, "WinPalm", "Ctrl + Alt + Pause is already used by another app. Pause is available in the tray menu.", ToolTipIcon.Info);
+      SystemEvents.SessionSwitch += SessionChanged; SystemEvents.PowerModeChanged += PowerChanged;
+      SystemEvents.DisplaySettingsChanged += DisplaysChanged;
+      System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
+      RefreshSessionState();
+      Start(completingUpdate); CheckNetwork();
+      timer = new System.Windows.Forms.Timer { Interval = 2000 }; timer.Tick += async (_, _) => await Poll(); timer.Start();
+      if (!minimized && !completingUpdate) ShowWindow();
+      _ = Poll();
+      Updates.CheckWhenDue();
+    }
+    catch
+    {
+      ExitThreadCore();
+      throw;
+    }
   }
   internal void Quit() => ExitThread();
   /// Closing the window keeps WinPalm running; say so once, since Windows 11
@@ -68,7 +85,7 @@ internal sealed class HostContext : ApplicationContext
   internal void ExplainTray()
   {
     if (Preferences.TrayHintShown) return;
-    tray.ShowBalloonTip(8000, "WinPalm is still running", "Phones stay connected. Open or quit WinPalm from its icon in the notification area, by the clock.", ToolTipIcon.Info);
+    tray?.ShowBalloonTip(8000, "WinPalm is still running", "Phones stay connected. Open or quit WinPalm from its icon in the notification area, by the clock.", ToolTipIcon.Info);
     Preferences.TrayHintShown = true;
     try { Preferences.Save(); } catch (IOException error) { Diagnostics.Record(error); }
   }
@@ -83,8 +100,8 @@ internal sealed class HostContext : ApplicationContext
       Interlocked.Exchange(ref checkingNetwork, 0);
       var problem = task.IsCompletedSuccessfully ? task.Result : null;
       if (task.Exception is { } error) Diagnostics.Record(error.GetBaseException());
-      if (quitting || !window.IsHandleCreated) return;
-      window.BeginInvoke(() => { if (!quitting && problem != NetworkProblem) { NetworkProblem = problem; window.NetworkChanged(); } });
+      if (quitting || window is not { IsHandleCreated: true, IsDisposed: false } liveWindow) return;
+      liveWindow.BeginInvoke(() => { if (!quitting && problem != NetworkProblem) { NetworkProblem = problem; liveWindow.NetworkChanged(); } });
     }, TaskScheduler.Default);
   }
   /// Application.OpenForms omits hidden windows, so marshal through the
@@ -95,14 +112,24 @@ internal sealed class HostContext : ApplicationContext
   /// there would end the process, and the window may be closing.
   private void OnWindowThread(Action work)
   {
-    try { if (!quitting && window.IsHandleCreated && !window.IsDisposed) window.BeginInvoke(work); }
+    try { if (!quitting && window is { IsHandleCreated: true, IsDisposed: false } liveWindow) liveWindow.BeginInvoke(work); }
     catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException) { }
   }
-  internal void ShowWindow() { window.Show(); if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal; window.Activate(); }
-  internal void Start()
+  internal void ShowWindow()
   {
-    try { CoreBridge.Call(new { op = "start" }); KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); RefreshSoon(); }
-    catch (Exception error) { Diagnostics.Record(error); PalmDialog.Info(window.Visible ? window : null, "WinPalm couldn't start", error.Message, BadgeTone.Danger); }
+    if (window is null) return;
+    window.Show();
+    if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal;
+    window.Activate();
+  }
+  internal void Start() => Start(false);
+  private void Start(bool completingUpdate)
+  {
+    UpdateInstaller.RunStartup(
+      () => { CoreBridge.Call(new { op = "start" }); KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); RefreshSoon(); },
+      Diagnostics.Record,
+      error => PalmDialog.Info(window?.Visible == true ? window : null, "WinPalm couldn't start", error.Message, BadgeTone.Danger),
+      completingUpdate);
   }
   internal void Stop() { CoreBridge.TryCall(new { op = "stop" }); RefreshSoon(); }
   internal void Restart() { Stop(); Start(); }
@@ -118,16 +145,16 @@ internal sealed class HostContext : ApplicationContext
   }
   internal void RefreshSoon()
   {
-    try { Snapshot = CoreBridge.Call(new { op = "status" }); window.UpdateState(Snapshot); UpdateTray(); }
+    try { Snapshot = CoreBridge.Call(new { op = "status" }); window?.UpdateState(Snapshot); UpdateTray(); }
     catch (Exception error) { Diagnostics.Record(error); }
   }
   private void UpdateTray()
   {
     var paused = Snapshot.GetProperty("paused").GetBoolean(); var running = Snapshot.GetProperty("running").GetBoolean(); var count = Snapshot.GetProperty("connected").GetArrayLength();
     var summary = !running ? "WinPalm · Sharing stopped" : paused ? "WinPalm · Paused" : count > 0 ? $"WinPalm · {count} connected" : "WinPalm · Ready to pair";
-    tray.Text = summary;
-    statusItem.Text = summary;
-    pauseItem.Text = paused ? "Resume control" : "Pause control";
+    if (tray is not null) tray.Text = summary;
+    if (statusItem is not null) statusItem.Text = summary;
+    if (pauseItem is not null) pauseItem.Text = paused ? "Resume control" : "Pause control";
   }
   private async Task Poll()
   {
@@ -151,7 +178,7 @@ internal sealed class HostContext : ApplicationContext
         if (++ticks % 15 == 0) { KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "appsChanged" }); CoreBridge.Call(new { op = "permissionChanged" }); }
         return current;
       });
-      if (!quitting) { Snapshot = snapshot; window.UpdateState(snapshot); UpdateTray(); if (ticks % 15 == 0) { CheckNetwork(); Updates.CheckWhenDue(); } }
+      if (!quitting) { Snapshot = snapshot; window?.UpdateState(snapshot); UpdateTray(); if (ticks % 15 == 0) { CheckNetwork(); Updates.CheckWhenDue(); } }
     }
     catch (Exception error) { Diagnostics.Record(error); }
     finally { busy = false; }
@@ -166,7 +193,7 @@ internal sealed class HostContext : ApplicationContext
         if (AutomaticallyPaused) { CoreBridge.TryCall(new { op = "approve", id, allow = false }); break; }
         if (approvals.ContainsKey(id)) break;
         var approval = new ApprovalWindow(request, approvals.Count); approvals[id] = approval; approval.Show();
-        tray.ShowBalloonTip(8000, "WinPalm pairing request", "A nearby device is asking to control this PC. Review its name and address in WinPalm.", ToolTipIcon.Info); break;
+        tray?.ShowBalloonTip(8000, "WinPalm pairing request", "A nearby device is asking to control this PC. Review its name and address in WinPalm.", ToolTipIcon.Info); break;
       case "approvalEnded":
         if (approvals.Remove(value.GetProperty("id").GetUInt64(), out var ended)) { ended.End(); ended.Dispose(); }
         break;
@@ -180,8 +207,8 @@ internal sealed class HostContext : ApplicationContext
           displayApprovals.Clear();
         }
         break;
-      case "failed": tray.ShowBalloonTip(8000, "WinPalm server", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Warning); break;
-      case "notice": tray.ShowBalloonTip(5000, "WinPalm", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Info); break;
+      case "failed": tray?.ShowBalloonTip(8000, "WinPalm server", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Warning); break;
+      case "notice": tray?.ShowBalloonTip(5000, "WinPalm", value.GetProperty("message").GetString() ?? "See the WinPalm log for details.", ToolTipIcon.Info); break;
     }
     RefreshSoon();
   }
@@ -201,7 +228,7 @@ internal sealed class HostContext : ApplicationContext
       var approval = new ApprovalWindow(request, approvals.Count + displayApprovals.Count, screenRequest: true, response: RespondDisplayApproval);
       displayApprovals[id] = approval;
       approval.Show();
-      tray.ShowBalloonTip(8000, "WinPalm screen mirroring request", "A connected device is asking to view your screen. Review its name and address in WinPalm.", ToolTipIcon.Info);
+      tray?.ShowBalloonTip(8000, "WinPalm screen mirroring request", "A connected device is asking to view your screen. Review its name and address in WinPalm.", ToolTipIcon.Info);
     }
   }
   private void RespondDisplayApproval(ulong id, bool allow)
@@ -225,7 +252,7 @@ internal sealed class HostContext : ApplicationContext
       if (allow && !previous)
         try { SetDisplayEnabled(false); } catch (Exception restoreError) { Diagnostics.Record(restoreError); }
       Diagnostics.Record(error);
-      tray.ShowBalloonTip(8000, "WinPalm screen mirroring", "The screen-mirroring settings could not be saved. Check General and try again.", ToolTipIcon.Warning);
+      tray?.ShowBalloonTip(8000, "WinPalm screen mirroring", "The screen-mirroring settings could not be saved. Check General and try again.", ToolTipIcon.Warning);
     }
     RefreshSoon();
   }
@@ -310,16 +337,27 @@ internal sealed class HostContext : ApplicationContext
   }
   protected override void ExitThreadCore()
   {
-    if (quitting) return; quitting = true; timer.Stop(); timer.Dispose();
+    if (quitting) return; quitting = true; timer?.Stop(); timer?.Dispose();
     Updates.Dispose();
     SystemEvents.SessionSwitch -= SessionChanged; SystemEvents.PowerModeChanged -= PowerChanged;
     SystemEvents.DisplaySettingsChanged -= DisplaysChanged;
     System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged -= NetworkAddressChanged;
     CoreBridge.Event = null; CoreBridge.TryCall(new { op = "pause", paused = true }); CoreBridge.TryCall(new { op = "stop" });
     foreach (var approval in approvals.Values.ToArray()) { approval.End(); approval.Dispose(); }
-    approvals.Clear(); Win32.UnregisterHotKey(window.Handle, 1); tray.Visible = false; tray.Dispose();
+    approvals.Clear();
+    if (window is { IsDisposed: false } liveWindow)
+    {
+      if (liveWindow.IsHandleCreated) Win32.UnregisterHotKey(liveWindow.Handle, 1);
+      liveWindow.Shutdown();
+    }
+    if (tray is not null) { tray.Visible = false; tray.Dispose(); }
     foreach (var approval in displayApprovals.Values.ToArray()) { approval.End(); approval.Dispose(); }
     displayApprovals.Clear();
-    Services.Dispose(); window.Shutdown(); base.ExitThreadCore();
+    Services.Dispose(); base.ExitThreadCore();
+  }
+  protected override void Dispose(bool disposing)
+  {
+    if (disposing) ExitThreadCore();
+    base.Dispose(disposing);
   }
 }

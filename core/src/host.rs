@@ -100,6 +100,7 @@ pub(crate) struct Shared {
     pub voice_epoch: AtomicU64,
     state: Mutex<State>,
     pub tls: RwLock<Option<Arc<tls::Identity>>>,
+    pub tls_lock: Mutex<()>,
     pub port: AtomicU16,
     next_id: AtomicU64,
     pub icons: Mutex<IconCache>,
@@ -149,6 +150,7 @@ impl Shared {
                 approvals: HashMap::new(),
             }),
             tls: RwLock::new(None),
+            tls_lock: Mutex::new(()),
             port: AtomicU16::new(0),
             next_id: AtomicU64::new(1),
             icons: Mutex::new(HashMap::new()),
@@ -527,10 +529,12 @@ pub(crate) fn media_addresses() -> Vec<IpAddr> {
     }
 }
 
-/// Plain and encrypted base URLs for an address typed by hand. A bare host
-/// gets WinPalm's port; a URL is used as given, so a reverse proxy on the
-/// default HTTPS port works. `None` if it isn't usable.
-pub(crate) fn custom_link(address: &str, port: u16) -> Option<(String, String)> {
+/// Plain and optional encrypted base URLs for an address typed by hand. A bare
+/// host gets WinPalm's port; a URL is used as given, so a reverse proxy on the
+/// default HTTPS port works. An HTTPS URL is only advertised when the address
+/// explicitly specifies `https://` or the local CA can certify the host. `None`
+/// if the address isn't usable.
+pub(crate) fn custom_link(address: &str, port: u16) -> Option<(String, Option<String>)> {
     let address = address.trim();
     let (scheme, authority) = match address.split_once("://") {
         Some((scheme, rest)) => (Some(scheme.to_ascii_lowercase()), rest.trim_end_matches('/')),
@@ -560,7 +564,11 @@ pub(crate) fn custom_link(address: &str, port: u16) -> Option<(String, String)> 
                     .all(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
         }
     };
-    valid.then(|| (format!("{plain}://{authority}"), format!("https://{authority}")))
+    if !valid {
+        return None;
+    }
+    let secure = (plain == "https" || tls::permitted(&name)).then(|| format!("https://{authority}"));
+    Some((format!("{plain}://{authority}"), secure))
 }
 
 /// The host name of a custom pairing address, which the server accepts in
@@ -774,6 +782,9 @@ impl CoreHost {
             }
         }
         if previous.link_host != config.link_host || previous.host_name != config.host_name {
+            if self.is_running() {
+                server::refresh_identity_now(&self.shared);
+            }
             self.shared.emit(HostEvent::PairingChanged);
         }
     }
@@ -783,23 +794,39 @@ impl CoreHost {
         let port = self.shared.port.load(Ordering::Relaxed);
         let network = network_addresses();
         let addresses: Vec<IpAddr> = network.iter().map(|(ip, _)| *ip).collect();
-        let ip = addresses.first().map(IpAddr::to_string).unwrap_or_else(|| "127.0.0.1".into());
+        let lan_ip = addresses.iter().map(IpAddr::to_string).find(|candidate| tls::permitted(candidate));
+        let vpn_ip = network
+            .iter()
+            .filter(|(_, vpn)| *vpn)
+            .map(|(ip, _)| ip.to_string())
+            .find(|candidate| tls::permitted(candidate));
+        let fallback_ip = lan_ip.clone().unwrap_or_else(|| "127.0.0.1".into());
         let host = config.host_name.trim().trim_end_matches('.').to_string();
         let custom = match &config.link_host {
             LinkHost::Custom { address } => custom_link(address, port),
             _ => None,
         };
-        let (address, secure_address) = custom.unwrap_or_else(|| {
-            let link_host = match &config.link_host {
-                LinkHost::IpAddress => ip.clone(),
-                LinkHost::HostName | LinkHost::Custom { .. } if !host.is_empty() => host,
-                LinkHost::HostName | LinkHost::Custom { .. } => ip.clone(),
-            };
-            // Bare Windows computer names are not within the local CA's
-            // DNS constraints. Advertise its certified IP for HTTPS instead.
-            let secure_host = if tls::permitted(&link_host) { &link_host } else { &ip };
-            (format!("http://{link_host}:{port}"), format!("https://{secure_host}:{port}"))
-        });
+        let (address, secure_address) = match custom {
+            Some((addr, Some(secure))) => (addr, secure),
+            Some((addr, None)) => {
+                // The local CA cannot certify arbitrary suffixes (such as `.ts.net`
+                // or `.lan`) or IPv6 addresses. Fall back to a certified local address.
+                let secure_host =
+                    vpn_ip.or(lan_ip).or_else(|| tls::permitted(&host).then(|| host.clone())).unwrap_or(fallback_ip);
+                (addr, format!("https://{secure_host}:{port}"))
+            }
+            None => {
+                let link_host = match &config.link_host {
+                    LinkHost::IpAddress => fallback_ip.clone(),
+                    LinkHost::HostName | LinkHost::Custom { .. } if !host.is_empty() => host,
+                    LinkHost::HostName | LinkHost::Custom { .. } => fallback_ip.clone(),
+                };
+                // Bare Windows computer names are not within the local CA's
+                // DNS constraints. Advertise its certified IP for HTTPS instead.
+                let secure_host = if tls::permitted(&link_host) { &link_host } else { &fallback_ip };
+                (format!("http://{link_host}:{port}"), format!("https://{secure_host}:{port}"))
+            }
+        };
         let mut state = self.shared.state();
         let now = Instant::now();
         state.pairing.refresh(now);

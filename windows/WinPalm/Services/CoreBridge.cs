@@ -54,19 +54,3 @@ internal static class CoreBridge
     return Marshal.StringToCoTaskMemUTF8(JsonSerializer.Serialize(result, Preferences.Json));
   }
 }
-
-internal static class Diagnostics
-{
-  private static readonly object Gate = new();
-  internal static string FilePath => Path.Combine(Preferences.DataDirectory, "WinPalm.log");
-  internal static void Record(Exception error)
-  {
-    // Do not log messages, arguments, URLs, clipboard, PINs or speech text.
-    lock (Gate) try
-      {
-        if (System.IO.File.Exists(FilePath) && new FileInfo(FilePath).Length > 512_000) System.IO.File.Move(FilePath, FilePath + ".previous", true);
-        System.IO.File.AppendAllText(FilePath, $"{DateTimeOffset.UtcNow:O} {error.GetType().Name} HRESULT=0x{error.HResult:X8}\n");
-      }
-      catch (IOException) { }
-  }
-}

@@ -231,10 +231,14 @@ pub(crate) fn cursor(image: &mut [u8], out: (u32, u32), desktop: (u32, u32), sha
     }
 }
 
-pub(crate) fn annex_b(data: &[u8]) -> Option<Vec<u8>> {
-    if data.starts_with(&[0, 0, 1]) || data.starts_with(&[0, 0, 0, 1]) {
-        return Some(data.to_vec());
-    }
+fn valid_nal(nal: &[u8]) -> bool {
+    !nal.is_empty()
+        && nal[0] & 0x80 == 0
+        && nal[0] & 0x1f != 0
+        && !nal.windows(3).any(|w| w[0] == 0 && w[1] == 0 && w[2] <= 2)
+}
+
+fn avcc_to_annex_b(data: &[u8]) -> Option<Vec<u8>> {
     let mut output = Vec::with_capacity(data.len());
     let mut offset = 0;
     while offset < data.len() {
@@ -243,11 +247,56 @@ pub(crate) fn annex_b(data: &[u8]) -> Option<Vec<u8>> {
         if len == 0 || len > data.len() - offset {
             return None;
         }
+        let nal = &data[offset..offset + len];
+        if !valid_nal(nal) {
+            return None;
+        }
         output.extend_from_slice(&[0, 0, 0, 1]);
-        output.extend_from_slice(&data[offset..offset + len]);
+        output.extend_from_slice(nal);
         offset += len;
     }
     (!output.is_empty()).then_some(output)
+}
+
+fn start_code_len(data: &[u8], offset: usize) -> Option<usize> {
+    if data.get(offset..offset + 4) == Some(&[0, 0, 0, 1]) {
+        Some(4)
+    } else if data.get(offset..offset + 3) == Some(&[0, 0, 1]) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+fn valid_annex_b(data: &[u8]) -> bool {
+    let Some(first_len) = start_code_len(data, 0) else {
+        return false;
+    };
+    let mut starts = vec![(0usize, first_len)];
+    let mut offset = first_len;
+    while offset < data.len() {
+        if let Some(len) = start_code_len(data, offset) {
+            starts.push((offset, len));
+            offset += len;
+        } else {
+            offset += 1;
+        }
+    }
+    for (index, (start, code_len)) in starts.iter().copied().enumerate() {
+        let payload = start + code_len;
+        let end = starts.get(index + 1).map_or(data.len(), |(next, _)| *next);
+        if !valid_nal(&data[payload..end]) {
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn annex_b(data: &[u8]) -> Option<Vec<u8>> {
+    if let Some(converted) = avcc_to_annex_b(data) {
+        return Some(converted);
+    }
+    valid_annex_b(data).then(|| data.to_vec())
 }
 
 pub(crate) fn has_nal(data: &[u8], kind: u8) -> bool {
@@ -351,5 +400,55 @@ mod tests {
         assert!(has_nal(&headers, 8));
         assert!(!has_nal(&result, 7));
         assert!(!has_nal(&result, 8));
+    }
+
+    #[test]
+    fn bitstream_conversion_distinguishes_avcc_prefixes_from_annex_b() {
+        let avcc_nal = |payload: &[u8]| -> Vec<u8> {
+            let mut buf = (payload.len() as u32).to_be_bytes().to_vec();
+            buf.extend_from_slice(payload);
+            buf
+        };
+
+        // 1-byte AVCC NALs (0x00000001 length prefix) followed by another AVCC NAL.
+        let mut one_byte_multi = avcc_nal(&[0x09]);
+        one_byte_multi.extend_from_slice(&avcc_nal(&[0x65, 0x88, 0x84]));
+        assert_eq!(annex_b(&one_byte_multi).unwrap(), [0, 0, 0, 1, 0x09, 0, 0, 0, 1, 0x65, 0x88, 0x84]);
+        assert_eq!(annex_b(&avcc_nal(&[0x09])).unwrap(), [0, 0, 0, 1, 0x09]);
+
+        // AVCC NAL lengths in 256..=511 start with [0, 0, 1, <lsb>], which must not
+        // be mistaken for a 3-byte Annex B start code.
+        for len in [256usize, 261, 300, 511] {
+            let mut payload = vec![0x65];
+            payload.resize(len, 0x88);
+            let mut packet = avcc_nal(&payload);
+            packet.extend_from_slice(&avcc_nal(&[0x41, 0x9a]));
+            let converted = annex_b(&packet).unwrap();
+            let mut expected = vec![0, 0, 0, 1];
+            expected.extend_from_slice(&payload);
+            expected.extend_from_slice(&[0, 0, 0, 1, 0x41, 0x9a]);
+            assert_eq!(converted, expected, "AVCC length {len} must preserve full payload");
+        }
+
+        // Genuine 3-byte and 4-byte Annex B streams pass through unchanged.
+        let three_byte_annex = [0, 0, 1, 0x67, 0x42, 0xe0, 0x1e, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80];
+        assert_eq!(annex_b(&three_byte_annex).unwrap(), three_byte_annex);
+        let four_byte_annex = [0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1e, 0, 0, 0, 1, 0x65, 0x88, 0x84];
+        assert_eq!(annex_b(&four_byte_annex).unwrap(), four_byte_annex);
+
+        // Malformed and truncated inputs are rejected.
+        for invalid in [
+            &[][..],
+            &[0, 0, 1][..],
+            &[0, 0, 0, 1][..],
+            &[0, 0, 0, 1, 0x00][..],
+            &[0, 0, 0, 1, 0x85][..],
+            &[0, 0, 0, 1, 0x67, 0, 0, 0, 1][..],
+            &[0, 0, 1, 0x00, 0x65, 0x88][..],
+            &[0, 0, 0, 1, 0x65, 0, 0, 2, 0x88][..],
+            &[0, 0, 0, 1, 0x09, 0, 0, 0, 5, 0x65][..],
+        ] {
+            assert!(annex_b(invalid).is_none(), "expected rejection for {invalid:?}");
+        }
     }
 }

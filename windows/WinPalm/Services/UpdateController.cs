@@ -3,17 +3,33 @@ using System.Runtime.InteropServices;
 
 namespace WinPalm.Services;
 
-internal sealed class UpdateController(Preferences preferences) : IDisposable
+internal sealed class UpdateController : IDisposable
 {
-  private readonly ReleaseUpdates releases = new();
+  private readonly Preferences preferences;
+  private readonly ReleaseUpdates releases;
+  private readonly Action<string, string, ReleaseUpdates.Release, string, CancellationToken> prepare;
+  private readonly Func<string, CancellationToken, Task> startHelper;
   private readonly CancellationTokenSource lifetime = new();
   private CancellationTokenSource? download;
-  private DateTime nextAutomatic = preferences.LastUpdateCheckUtc <= DateTime.UtcNow && preferences.LastUpdateCheckUtc >= DateTime.UtcNow.AddDays(-1)
-      ? preferences.LastUpdateCheckUtc.AddDays(1) : DateTime.MinValue;
+  private DateTime nextAutomatic;
+
+  internal UpdateController(
+    Preferences preferences,
+    ReleaseUpdates? releases = null,
+    Action<string, string, ReleaseUpdates.Release, string, CancellationToken>? prepare = null,
+    Func<string, CancellationToken, Task>? startHelper = null)
+  {
+    this.preferences = preferences;
+    this.releases = releases ?? new();
+    this.prepare = prepare ?? UpdateInstaller.Prepare;
+    this.startHelper = startHelper ?? UpdateInstaller.StartHelperAsync;
+    nextAutomatic = preferences.LastUpdateCheckUtc <= DateTime.UtcNow && preferences.LastUpdateCheckUtc >= DateTime.UtcNow.AddDays(-1)
+        ? preferences.LastUpdateCheckUtc.AddDays(1) : DateTime.MinValue;
+  }
   internal event Action? Changed;
   internal event Action? UpdateFound;
   internal event Action? RestartRequested;
-  internal ReleaseUpdates.Release? Available { get; private set; }
+  internal ReleaseUpdates.Release? Available { get; set; }
   internal bool Checking { get; private set; }
   internal bool Installing { get; private set; }
   internal bool Busy => Checking || Installing;
@@ -46,7 +62,7 @@ internal sealed class UpdateController(Preferences preferences) : IDisposable
       try { preferences.Save(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Diagnostics.Record(error); }
     }
     catch (OperationCanceledException) { Message = "Couldn’t reach GitHub in time. Try again when you’re online."; }
-    catch (Exception error) when (error is HttpRequestException or IOException or System.Text.Json.JsonException or InvalidOperationException or FormatException or KeyNotFoundException)
+    catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException or FormatException or KeyNotFoundException)
     {
       Diagnostics.Record(error);
       Message = error is HttpRequestException { StatusCode: HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests }
@@ -68,13 +84,13 @@ internal sealed class UpdateController(Preferences preferences) : IDisposable
       var progress = new Progress<int>(value => { Progress = value; if (!lifetime.IsCancellationRequested) Changed?.Invoke(); });
       var archive = await releases.DownloadAsync(release, stage, progress, operation.Token);
       Message = "Verifying update package…"; Changed?.Invoke();
-      await Task.Run(() => UpdateInstaller.Prepare(archive, stage, release, Architecture, operation.Token), operation.Token);
+      await Task.Run(() => prepare(archive, stage, release, Architecture, operation.Token), operation.Token);
       Message = "Restarting WinPalm to finish the update…"; Changed?.Invoke();
-      await UpdateInstaller.StartHelperAsync(stage, operation.Token);
+      await startHelper(stage, operation.Token);
       handedOff = true; RestartRequested?.Invoke();
     }
     catch (OperationCanceledException) { Message = "Update cancelled. WinPalm is still on the current version."; }
-    catch (Exception error) when (error is IOException or UnauthorizedAccessException or HttpRequestException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Security.SecurityException)
+    catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or HttpRequestException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Security.SecurityException)
     {
       Diagnostics.Record(error); Message = "Couldn’t install the update. " + error.Message;
     }

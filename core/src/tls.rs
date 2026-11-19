@@ -112,13 +112,26 @@ fn ca_params(name: &str, expires: OffsetDateTime) -> CertificateParams {
 
 /// Whether the authority's name constraints allow `name`.
 pub(crate) fn permitted(name: &str) -> bool {
+    let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     match name.parse::<IpAddr>() {
         Ok(IpAddr::V4(ip)) => PERMITTED_V4.iter().any(|(network, prefix)| {
             let mask = u32::MAX << (32 - prefix);
             u32::from(ip) & mask == u32::from_be_bytes(*network)
         }),
         Ok(IpAddr::V6(_)) => false,
-        Err(_) => PERMITTED_DOMAINS.iter().any(|domain| name == *domain || name.ends_with(&format!(".{domain}"))),
+        Err(_) => {
+            let valid_dns = !name.is_empty()
+                && name.len() <= 253
+                && name.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                });
+            valid_dns
+                && (name == "localhost" || PERMITTED_DOMAINS.iter().any(|domain| name.ends_with(&format!(".{domain}"))))
+        }
     }
 }
 
@@ -164,10 +177,18 @@ fn verify_chain(ca: &[u8], leaf: &[u8], names: &[String]) -> Result<(), rustls::
 /// Names the server certificate must cover: the Bonjour name, localhost and
 /// every current LAN address the authority is allowed to vouch for.
 pub fn server_names(host_name: &str, addresses: &[IpAddr]) -> Vec<String> {
+    server_names_with_custom(host_name, None, addresses)
+}
+
+/// Like [`server_names`], plus an optional custom pairing host when the local
+/// authority is allowed to vouch for it.
+pub fn server_names_with_custom(host_name: &str, custom_host: Option<&str>, addresses: &[IpAddr]) -> Vec<String> {
     let mut names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let host = host_name.trim().trim_end_matches('.');
-    if !host.is_empty() {
-        names.push(host.to_ascii_lowercase());
+    for candidate in std::iter::once(host_name).chain(custom_host) {
+        let host = candidate.trim().trim_end_matches('.');
+        if !host.is_empty() {
+            names.push(host.to_ascii_lowercase());
+        }
     }
     names.extend(addresses.iter().map(IpAddr::to_string));
     names.retain(|name| permitted(name));
@@ -400,7 +421,24 @@ mod tests {
             server_names("Studio.local", &addresses),
             ["100.101.2.3", "127.0.0.1", "172.31.0.2", "192.168.1.5", "localhost", "studio.local"]
         );
+        assert_eq!(
+            server_names_with_custom("Studio.local", Some("Custom-Box.local."), &addresses),
+            ["100.101.2.3", "127.0.0.1", "172.31.0.2", "192.168.1.5", "custom-box.local", "localhost", "studio.local"]
+        );
+        assert_eq!(
+            server_names_with_custom("Studio.local", Some("100.101.2.9"), &[]),
+            ["100.101.2.9", "127.0.0.1", "localhost", "studio.local"]
+        );
+        assert!(
+            !server_names_with_custom("Studio.local", Some("studio.ts.net"), &[]).contains(&"studio.ts.net".into())
+        );
         assert!(!server_names("studio.example.com", &[]).contains(&"studio.example.com".to_string()));
         assert!(!permitted("notlocal"));
+        assert!(!permitted("local"));
+        assert!(!permitted("-bad.local"));
+        assert!(!permitted("bad..local"));
+        assert!(!permitted("studio.ts.net"));
+        assert!(permitted("Studio.LOCAL."));
+        assert!(permitted("sub.localhost"));
     }
 }

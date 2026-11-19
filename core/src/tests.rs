@@ -587,6 +587,25 @@ fn trusts_forwarded_headers_only_from_an_allowed_proxy_on_this_mac() {
 
     let plain = parse_head(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8790\r\n").unwrap();
     assert_eq!(client(&plain, "::1".parse().unwrap(), true, true).address, "::1".parse::<std::net::IpAddr>().unwrap());
+
+    let repeated = parse_head(
+        b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nX-Forwarded-For: 10.0.0.9\r\nX-Forwarded-For: 10.8.0.5\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Proto: http\r\nX-Forwarded-Host: mac.local\r\nX-Forwarded-Host: evil.example\r\n",
+    )
+    .unwrap();
+    let repeated_client = client(&repeated, loopback, false, true);
+    assert_eq!(repeated_client.address, "10.8.0.5".parse::<std::net::IpAddr>().unwrap());
+    assert!(!repeated_client.secure, "the last X-Forwarded-Proto header line wins");
+    assert_eq!(repeated_client.host, Some("evil.example"), "the last X-Forwarded-Host header line wins");
+
+    let empty_forwarded_host = parse_head(
+        b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nX-Forwarded-For: 10.8.0.5\r\nX-Forwarded-Host: mac.local\r\nX-Forwarded-Host: \r\n",
+    )
+    .unwrap();
+    assert_eq!(
+        client(&empty_forwarded_host, loopback, false, true).host,
+        None,
+        "an empty final X-Forwarded-Host must not fall back to Host"
+    );
 }
 
 #[test]
@@ -618,6 +637,25 @@ fn works_behind_a_reverse_proxy_when_allowed() {
         let rewritten =
             get("Host: 127.0.0.1:8790\r\nX-Forwarded-For: 10.8.0.3\r\nX-Forwarded-Host: evil.example\r\n").await;
         assert!(rewritten.starts_with("HTTP/1.1 421"), "forwarded names are checked too: {rewritten}");
+        let repeated_forwarded_host = get(
+            "Host: mac.example.com\r\nX-Forwarded-For: 10.8.0.3\r\nX-Forwarded-Host: mac.example.com\r\nX-Forwarded-Host: evil.example\r\n",
+        )
+        .await;
+        assert!(
+            repeated_forwarded_host.starts_with("HTTP/1.1 421"),
+            "repeated X-Forwarded-Host uses the proxy's final entry: {repeated_forwarded_host}"
+        );
+        let empty_forwarded_host =
+            get("Host: mac.example.com\r\nX-Forwarded-For: 10.8.0.3\r\nX-Forwarded-Host: \r\n").await;
+        assert!(
+            empty_forwarded_host.starts_with("HTTP/1.1 421"),
+            "empty X-Forwarded-Host is rejected instead of falling back to Host: {empty_forwarded_host}"
+        );
+        let duplicate_origin = get(
+            "Host: mac.example.com\r\nOrigin: https://mac.example.com\r\nOrigin: https://evil.example\r\nX-Forwarded-For: 10.8.0.3\r\nX-Forwarded-Proto: https\r\n",
+        )
+        .await;
+        assert!(duplicate_origin.starts_with("HTTP/1.1 400"), "duplicate Origin is rejected: {duplicate_origin}");
 
         let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let request = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -722,20 +760,27 @@ fn abandoned_approval_requests_back_off() {
 #[test]
 fn custom_pairing_addresses() {
     use crate::host::custom_link;
-    let pair = |a: &str, b: &str| Some((a.to_string(), b.to_string()));
+    let pair = |a: &str, b: Option<&str>| Some((a.to_string(), b.map(str::to_string)));
     assert_eq!(
         custom_link("https://Mac.example.com/", 8790),
-        pair("https://Mac.example.com", "https://Mac.example.com"),
-        "a URL keeps its own port, so a proxy on 443 works"
+        pair("https://Mac.example.com", Some("https://Mac.example.com")),
+        "an explicit HTTPS URL keeps its own scheme and port, so a proxy on 443 works"
     );
-    assert_eq!(custom_link(" studio.lan ", 8790), pair("http://studio.lan:8790", "https://studio.lan:8790"));
-    assert_eq!(custom_link("studio.lan:9000", 8790), pair("http://studio.lan:9000", "https://studio.lan:9000"));
-    assert_eq!(custom_link("http://10.0.0.2:8790", 1), pair("http://10.0.0.2:8790", "https://10.0.0.2:8790"));
     assert_eq!(
-        custom_link("fd7a:115c:a1e0::1", 8790),
-        pair("http://[fd7a:115c:a1e0::1]:8790", "https://[fd7a:115c:a1e0::1]:8790")
+        custom_link(" custom-box.local ", 8790),
+        pair("http://custom-box.local:8790", Some("https://custom-box.local:8790"))
     );
-    assert_eq!(custom_link("[::1]", 8790), pair("http://[::1]:8790", "https://[::1]:8790"));
+    assert_eq!(custom_link("100.101.2.3", 8790), pair("http://100.101.2.3:8790", Some("https://100.101.2.3:8790")));
+    assert_eq!(custom_link(" studio.lan ", 8790), pair("http://studio.lan:8790", None));
+    assert_eq!(custom_link("studio.lan:9000", 8790), pair("http://studio.lan:9000", None));
+    assert_eq!(custom_link("studio.ts.net", 8790), pair("http://studio.ts.net:8790", None));
+    assert_eq!(
+        custom_link("https://studio.ts.net/", 8790),
+        pair("https://studio.ts.net", Some("https://studio.ts.net"))
+    );
+    assert_eq!(custom_link("http://10.0.0.2:8790", 1), pair("http://10.0.0.2:8790", Some("https://10.0.0.2:8790")));
+    assert_eq!(custom_link("fd7a:115c:a1e0::1", 8790), pair("http://[fd7a:115c:a1e0::1]:8790", None));
+    assert_eq!(custom_link("[::1]", 8790), pair("http://[::1]:8790", None));
     for bad in ["", "   ", "ftp://studio", "studio/path", "user@studio", "https://", "studio?x"] {
         assert_eq!(custom_link(bad, 8790), None, "{bad:?}");
     }
@@ -747,6 +792,7 @@ fn custom_pairing_addresses() {
     let info = f.host.pairing_info();
     assert!(info.link.starts_with("https://winpalm.example.com/#pair="), "{}", info.link);
     assert_eq!(info.address, "https://winpalm.example.com");
+    assert_eq!(info.secure_address, "https://winpalm.example.com");
     f.rt.block_on(async {
         let mut tcp = TcpStream::connect(("127.0.0.1", f.port)).await.unwrap();
         tcp.write_all(b"GET /api/info HTTP/1.1\r\nHost: WINPALM.example.com\r\nConnection: close\r\n\r\n")
@@ -755,6 +801,65 @@ fn custom_pairing_addresses() {
         let mut out = Vec::new();
         tcp.read_to_end(&mut out).await.unwrap();
         assert!(out.starts_with(b"HTTP/1.1 200"), "the custom name is served: {}", String::from_utf8_lossy(&out));
+    });
+
+    // Unsupported public suffix without explicit https:// advertises HTTP on that
+    // name and falls back secure_address to a certified local address.
+    let mut config = f.config.clone();
+    config.link_host = LinkHost::Custom { address: "studio.ts.net".into() };
+    f.host.update_config(config);
+    let ts_info = f.host.pairing_info();
+    assert_eq!(ts_info.address, format!("http://studio.ts.net:{}", f.port));
+    assert!(!ts_info.secure_address.contains("studio.ts.net"), "{}", ts_info.secure_address);
+    assert!(ts_info.secure_address.starts_with("https://"), "{}", ts_info.secure_address);
+
+    // Permitted custom .local hostnames are advertised for HTTPS and immediately
+    // included/refreshed in the live server TLS certificate SANs.
+    let mut roots = tokio_rustls::rustls::RootCertStore::empty();
+    roots.add(tokio_rustls::rustls::pki_types::CertificateDer::from(f.host.ca_certificate())).unwrap();
+    let tls_config = Arc::new(
+        tokio_rustls::rustls::ClientConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth(),
+    );
+    let connect_tls = |name: &str| {
+        let tls_config = tls_config.clone();
+        let name = name.to_string();
+        let port = f.port;
+        async move {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let connector = tokio_rustls::TlsConnector::from(tls_config);
+            let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from(name).unwrap();
+            connector.connect(server_name, tcp).await
+        }
+    };
+
+    let mut config = f.config.clone();
+    config.link_host = LinkHost::Custom { address: "custom-box.local".into() };
+    f.host.update_config(config);
+    let custom_info = f.host.pairing_info();
+    assert_eq!(custom_info.address, format!("http://custom-box.local:{}", f.port));
+    assert_eq!(custom_info.secure_address, format!("https://custom-box.local:{}", f.port));
+    f.rt.block_on(async {
+        assert!(connect_tls("custom-box.local").await.is_ok(), "custom .local host is covered by live cert SANs");
+    });
+
+    let mut config = f.config.clone();
+    config.link_host = LinkHost::Custom { address: "100.101.2.3".into() };
+    f.host.update_config(config);
+    let vpn_info = f.host.pairing_info();
+    assert_eq!(vpn_info.address, format!("http://100.101.2.3:{}", f.port));
+    assert_eq!(vpn_info.secure_address, format!("https://100.101.2.3:{}", f.port));
+    f.rt.block_on(async {
+        assert!(connect_tls("100.101.2.3").await.is_ok(), "CGNAT custom IP is covered after SAN refresh");
+        assert!(
+            connect_tls("custom-box.local").await.is_err(),
+            "removed custom hostname is no longer covered after SAN refresh"
+        );
     });
 
     let mut config = f.config.clone();
