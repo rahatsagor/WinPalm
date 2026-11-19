@@ -388,17 +388,23 @@ impl<S: EventSink> Engine<S> {
                     let wait = self
                         .next_deadline(now)
                         .map(|deadline| deadline.saturating_duration_since(now))
-                        .unwrap_or(Duration::from_secs(1));
+                        .or_else(|| (!self.sessions.is_empty()).then_some(Duration::from_secs(1)));
                     #[cfg(windows)]
-                    timer.want(wait < FINE_TIMER_BELOW);
+                    timer.want(wait.is_some_and(|d| d < FINE_TIMER_BELOW));
                     let Some(rx) = &self.rx else { break };
-                    match rx.recv_timeout(wait) {
-                        Ok(command) => command,
-                        Err(RecvTimeoutError::Timeout) => {
-                            self.tick(Instant::now());
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => break,
+                    match wait {
+                        Some(wait) => match rx.recv_timeout(wait) {
+                            Ok(command) => command,
+                            Err(RecvTimeoutError::Timeout) => {
+                                self.tick(Instant::now());
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        },
+                        None => match rx.recv() {
+                            Ok(command) => command,
+                            Err(_) => break,
+                        },
                     }
                 }
             };

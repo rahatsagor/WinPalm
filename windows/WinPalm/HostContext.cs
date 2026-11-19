@@ -26,7 +26,9 @@ internal sealed class HostContext : ApplicationContext
   private ToolStripMenuItem? updateItem;
   private bool busy, quitting;
   private nint lastLayout, lastForeground;
-  private int ticks, checkingNetwork;
+  private int checkingNetwork, resyncNeeded;
+  private DateTime nextPeriodicCheck = DateTime.UtcNow.AddSeconds(30);
+  private DateTime nextTimingSync = DateTime.UtcNow.AddSeconds(30);
   internal HostContext(Preferences preferences, bool minimized, bool completingUpdate = false)
   {
     Preferences = preferences; Updates = new(preferences); Services = new(preferences);
@@ -89,7 +91,11 @@ internal sealed class HostContext : ApplicationContext
     Preferences.TrayHintShown = true;
     try { Preferences.Save(); } catch (IOException error) { Diagnostics.Record(error); }
   }
-  private void NetworkAddressChanged(object? sender, EventArgs args) => CheckNetwork();
+  private void NetworkAddressChanged(object? sender, EventArgs args)
+  {
+    if (!quitting) CoreBridge.TryCall(new { op = "networkChanged" });
+    CheckNetwork();
+  }
   /// Look for a Public network profile or a firewall Block rule in the
   /// background; COM and registry reads can take a moment.
   internal void CheckNetwork()
@@ -121,6 +127,7 @@ internal sealed class HostContext : ApplicationContext
     window.Show();
     if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal;
     window.Activate();
+    UpdatePollInterval();
   }
   internal void Start() => Start(false);
   private void Start(bool completingUpdate)
@@ -156,6 +163,15 @@ internal sealed class HostContext : ApplicationContext
     if (statusItem is not null) statusItem.Text = summary;
     if (pauseItem is not null) pauseItem.Text = paused ? "Resume control" : "Pause control";
   }
+  internal void WindowVisibilityChanged() => UpdatePollInterval();
+  private void UpdatePollInterval(bool? hasConnected = null)
+  {
+    if (timer is null || quitting) return;
+    var connected = hasConnected ?? (Snapshot.ValueKind == JsonValueKind.Object && Snapshot.GetProperty("connected").GetArrayLength() > 0);
+    var visible = window is { IsDisposed: false, Visible: true } && window.WindowState != FormWindowState.Minimized;
+    var interval = connected || visible ? 2000 : 15000;
+    if (timer.Interval != interval) timer.Interval = interval;
+  }
   private async Task Poll()
   {
     if (busy || quitting) return; busy = true;
@@ -165,20 +181,44 @@ internal sealed class HostContext : ApplicationContext
       {
         RefreshSessionState();
         var current = CoreBridge.Call(new { op = "status" });
-        var layout = KeyboardLayouts.Current; var foreground = Win32.GetForegroundWindow();
-        if (layout != lastLayout) { lastLayout = layout; CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); }
-        // An administrator window in front blocks input; update the phone's badge.
-        if (foreground != lastForeground) { lastForeground = foreground; CoreBridge.Call(new { op = "appsChanged" }); CoreBridge.Call(new { op = "permissionChanged" }); }
-        if (current.GetProperty("connected").GetArrayLength() > 0)
+        var hasConnected = current.GetProperty("connected").GetArrayLength() > 0;
+        if (hasConnected)
         {
+          if (Interlocked.Exchange(ref resyncNeeded, 0) == 1)
+          {
+            lastLayout = 0; lastForeground = 0; nextTimingSync = DateTime.MinValue;
+          }
+          var layout = KeyboardLayouts.Current; var foreground = Win32.GetForegroundWindow();
+          if (layout != lastLayout) { lastLayout = layout; CoreBridge.Call(new { op = "layout", layout = KeyboardLayouts.Read() }); }
+          // An administrator window in front blocks input; update the phone's badge.
+          if (foreground != lastForeground) { lastForeground = foreground; CoreBridge.Call(new { op = "appsChanged" }); CoreBridge.Call(new { op = "permissionChanged" }); }
           var volume = AudioVolume.Read(); CoreBridge.Call(new { op = "volume", value = volume?.Value, muted = volume?.Muted });
+          // Running apps are read fresh for every list; installed apps are
+          // rescanned at most every two minutes, or after a launch.
+          if (DateTime.UtcNow >= nextTimingSync)
+          {
+            nextTimingSync = DateTime.UtcNow.AddSeconds(30);
+            KeyboardLayouts.UpdateTiming();
+            CoreBridge.Call(new { op = "appsChanged" });
+            CoreBridge.Call(new { op = "permissionChanged" });
+          }
         }
-        // Running apps are read fresh for every list; installed apps are
-        // rescanned at most every two minutes, or after a launch.
-        if (++ticks % 15 == 0) { KeyboardLayouts.UpdateTiming(); CoreBridge.Call(new { op = "appsChanged" }); CoreBridge.Call(new { op = "permissionChanged" }); }
         return current;
       });
-      if (!quitting) { Snapshot = snapshot; window?.UpdateState(snapshot); UpdateTray(); if (ticks % 15 == 0) { CheckNetwork(); Updates.CheckWhenDue(); } }
+      if (!quitting)
+      {
+        Snapshot = snapshot;
+        window?.UpdateState(snapshot);
+        UpdateTray();
+        var hasConnected = snapshot.GetProperty("connected").GetArrayLength() > 0;
+        UpdatePollInterval(hasConnected);
+        if (DateTime.UtcNow >= nextPeriodicCheck)
+        {
+          nextPeriodicCheck = DateTime.UtcNow.AddSeconds(30);
+          CheckNetwork();
+          Updates.CheckWhenDue();
+        }
+      }
     }
     catch (Exception error) { Diagnostics.Record(error); }
     finally { busy = false; }
@@ -188,6 +228,11 @@ internal sealed class HostContext : ApplicationContext
     if (quitting) return;
     switch (value.GetProperty("event").GetString())
     {
+      case "sessionsChanged":
+        Volatile.Write(ref resyncNeeded, 1);
+        UpdatePollInterval(true);
+        _ = Poll();
+        break;
       case "approvalRequested":
         var request = value.GetProperty("request"); var id = request.GetProperty("id").GetUInt64();
         if (AutomaticallyPaused) { CoreBridge.TryCall(new { op = "approve", id, allow = false }); break; }

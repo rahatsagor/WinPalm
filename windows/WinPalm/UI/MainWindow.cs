@@ -83,8 +83,9 @@ internal sealed class MainWindow : Form
     {
       if (Visible && WindowState != FormWindowState.Minimized) page.Relayout();
       PinVisibility();
+      host.WindowVisibilityChanged();
     };
-    Resize += (_, _) => PinVisibility();
+    Resize += (_, _) => { PinVisibility(); host.WindowVisibilityChanged(); };
     Shown += (_, _) =>
     {
       Theme.ApplyWindowChrome(this, Theme.Sidebar, roundCorners: true);

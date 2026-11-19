@@ -776,7 +776,7 @@ async fn run(
         .set_sctp_max_message_size(1024)
         .set_sctp_max_buffered_amount(128 * 1024)
         .enable_bwe(Some(Bitrate::mbps(1)))
-        .set_stats_interval(Some(Duration::from_secs(1)));
+        .set_stats_interval(None);
     builder.codec_config().clear();
     // The encoder always emits Constrained Baseline. The receiver's offered
     // level, not this local receive ceiling, determines capture limits below.
@@ -818,7 +818,7 @@ async fn run(
     let mut last_keyframe = Instant::now() - Duration::from_secs(1);
     let mut waiting_for_keyframe = true;
     let mut send_failures = SendFailures::default();
-    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         if stopped.load(Ordering::Acquire) {
             return Ok(());
