@@ -2,82 +2,92 @@
 
 ## [Unreleased]
 
-### Windows app
+## [1.0.0] - 2026-11-20
 
-- Keep local control usable when Remote Desktop Services is stopped. If the
-  WTS query fails, require Windows to confirm the Default desktop is receiving
-  input; locked, disconnected and unverifiable states remain blocked.
-- Preserve unreadable, corrupt and newer paired-device files and phone tokens.
-  Refuse remembered pairing until recovery, and expose an intentional reset in
-  Devices. Validate saved HTTPS key/certificate pairs and the full server chain,
-  including recovery from interrupted authority replacement.
-- Keep the PC and display awake during an allowed live mirror. Read the initial
-  Windows session lock state, reconcile session transitions and release each
-  capture's power requests on stop or rebuild. Explicit lock and sleep still stop it.
-- Restore an initially empty clipboard when quitting during a temporary paste,
-  preserve subsequent user copies and make repeated cleanup safe.
-- Bundle current app, Rust, phone, NuGet/.NET and installer license notices.
-  Open them from About and verify their resource and package requirements.
-- Reject empty or duplicate Deck IDs in native imports and phone saves.
-- Add optional screen mirroring with DXGI Desktop Duplication capture and Media
-  Foundation H.264 encoding. WinPalm prefers a compatible hardware encoder and
-  falls back to the Windows software encoder when needed. Enable viewing in
-  General, then grant each device access in Devices or approve its native
-  request on the PC.
-- Capture and encoding stop when viewing ends, control is paused, the PC is
-  locked or asleep, the displays turn off, or access is revoked. No desktop
-  audio is captured and no screen recording is saved.
+See your Windows PC's screen on your phone while you use the trackpad or
+keyboard. This release also reorganizes phone settings, lowers idle background
+activity, and hardens HTTPS, networking, and update recovery.
+
+### Screen mirroring
+
+- Open **Display** on your phone to view one Windows monitor. Use the preview
+  on its own, above or beside the trackpad or keyboard, or fullscreen. Pinch to
+  zoom with an adaptive zoom ceiling, drag to pan, and move the PC pointer onto
+  the selected monitor.
+- Choose adaptive Media Foundation H.264 video (preferring a compatible
+  hardware encoder with automatic software fallback) or **HD text · lossless**
+  for small text and code. HD text preserves source pixels within a 4K pixel
+  budget and sends dirty-rect updates up to four times per second. Live video
+  negotiates H.264 High/Main/Baseline profiles, uses BT.709 color, refines fine
+  detail when the desktop settles, and requests a shorter playback delay on
+  supported browsers.
+- Screen mirroring is off by default. Enable **Allow screen mirroring** in
+  **General**, then allow individual devices in **Devices** or approve a
+  phone's access request on the PC.
+- Display works over HTTP and HTTPS with encrypted WebRTC media and needs a
+  direct UDP connection. The PC and display stay awake while you view them.
+  Pausing, locking, sleeping, turning off displays, revoking access, or leaving
+  Display stops capture immediately. No desktop audio is captured and no screen
+  recordings are saved.
 - Refresh capture after monitor rotation, resolution or arrangement changes,
   preserve the video clock during recovery, and stop if the selected monitor
-  disappears. Keep encoder timing aligned with adaptive capture frame rates.
-- Improve video pacing while WinPalm runs in the tray. Reuse resize plans and
-  picture buffers, update only the newest available desktop, and reuse the
-  resized background for separate cursor updates.
+  disappears. Keep the live view active through monitor-list refreshes and
+  unrelated Windows capability changes.
+
+### Windows app
+
+- Reduce idle CPU wakeups across the Rust core and Windows host: block the
+  input engine while no devices are connected, wake housekeeping on network or
+  config changes, skip background broadcasts when idle, and back off hidden
+  host polling.
+- Preserve unreadable, corrupt and newer paired-device files and phone tokens.
+  Refuse remembered pairing until recovery, and expose an intentional reset in
+  **Devices**.
+- Validate saved HTTPS key/certificate pairs and the full server chain,
+  including recovery from interrupted authority replacement and live SAN
+  refresh for custom addresses. Disable certificate export while stopped and
+  warn if certificate bytes are not ready yet.
+- Harden WebRTC UDP socket readers against transient resets and preserve
+  Windows LAN adapter priority when ranking media endpoints. Add defense-in-depth
+  URL scheme checks on Windows matching the core's shell-permission rules
+  (including `file:`, `ssh:`, `sftp:`, `webdav:`, and `vnc:`).
+- Keep local control usable when Remote Desktop Services is stopped by checking
+  that the Default desktop is receiving input; locked, disconnected and
+  unverifiable states remain blocked.
+- Improve updater reliability: handle corrupt ZIP archives cleanly, roll back
+  failed updates without blocking modals, fix `INetwork` COM vtable order in
+  network checks, and guard audio volume COM errors.
+- Improve approval popups with Escape-to-decline, screen-clamped stacked
+  positioning, and clearer paired vs temporary access details.
+- Restore an initially empty clipboard when quitting during a temporary paste,
+  reject empty or duplicate Deck IDs in native imports and phone saves, and
+  bundle current app, Rust, phone, NuGet/.NET and installer license notices
+  accessible from **About**.
 - Add a synthetic H.264 encoder check to the native x64 and ARM64 self-test.
-  It verifies generated test pixels and does not capture a physical desktop or
-  validate a phone connection.
 
 ### Phone client
 
-- Organize Settings into Trackpad, Gestures, Keyboard, Display and Deck tabs.
-  Device preferences and actions follow the feature settings. Dictation setup
-  lives in Keyboard, and all supported settings and actions are visible.
+- Organize Settings into **Trackpad**, **Gestures**, **Keyboard**, **Display**
+  and **Deck** tabs. The connection card shows an **Encrypted** or **Not
+  encrypted** badge, and **Keyboard → Dictation setup** adapts its guidance to
+  the current connection.
+- Configure three- and four-finger gestures separately. **Copy settings from
+  another device** includes **Show touches** with Trackpad settings and
+  supports Display preferences. Device backups include Display preferences and
+  migrate legacy settings cleanly.
 - Enlarge touch targets and improve keyboard navigation in settings and
-  dialogs. Match trackpad hints to the enabled gestures, add recovery actions
-  to empty app views, and share display preferences with Display options.
-- Release click-bar and Media controls when pointer capture is lost. Cancel
-  pending volume updates on pause, hiding or leaving Media, and run pause
-  cleanup synchronously so rapid pause/resume cannot skip it.
-- Close a globally disabled mirror even while its monitor list is refreshing,
-  and ignore stale replies from the superseded list query.
-- Keep the monitor list and authorized live video/HD view through repeated
-  refreshes. Retain the newest waiting HD picture under backpressure and tolerate
-  transient UDP send errors while still timing out sustained failure.
-- Count overlapping mouse and media holds, including across devices, and ignore
-  old cleanup callbacks after release, pause or reconnection.
-- Prevent shortened custom-key IDs from colliding and reject inherited object
-  names as media controls. Keep screen mirroring terminology consistent.
-- Fix the two moderate formatter-tooling dependency advisories with scoped
-  overrides, verified through actual formatter and EditorConfig operations.
-- Add a Display tab to view one PC monitor, above a trackpad or keyboard, or
-  beside controls on a wide screen. Choose a monitor, zoom the preview, move
-  the PC pointer to that monitor, and select motion, battery or text quality.
-- HD text sends lossless PNG pictures up to a 3840 × 2160 pixel budget, at up
-  to one update per second. Display preferences can be copied and backed up.
-- Fullscreen mirroring hides input controls. Preview gestures stay on the phone,
-  and control mode and preview space can be adjusted from Display options.
-- Keep viewing active when Windows refreshes unrelated capabilities, including
-  foreground-app input permission. Opening Start or switching apps no longer
-  causes the phone to stop and refresh an unchanged display capability.
-- Preserve newly started views through repeated access grants and delayed
-  approval refreshes, and allow a failed display-list send to be retried.
-- Keep hidden controls out of keyboard navigation during fullscreen mirroring,
-  including responsive layout changes, and restore focus on exit.
-- Use matching up/down chevrons at every scroll-strip width and increase the
-  short handle to 112px.
-- Cancel scroll-strip end-hold, repeating media keys, held touch controls and
-  trackpad drag lock when control pauses, so old gestures cannot resume when
-  control is restored.
+  dialogs. **Tab** and **Shift+Tab** on a physical keyboard move focus through
+  the phone UI while keeping Windows tab-reorder shortcuts local; use the
+  on-screen **Keyboard → PC** layout to send Tab to the PC.
+- Match trackpad hints to enabled gestures, use matching up/down chevrons at
+  every scroll-strip width (including wide Display mode), and offer **Clear
+  search** on an empty app search.
+- Release click-bar, scroll-strip hold, repeating media keys, held touch
+  controls and trackpad drag lock synchronously on pause, lost pointer capture,
+  or disconnect. Count overlapping mouse and media holds across devices.
+- Prevent shortened custom-key IDs from colliding, reject inherited object
+  names as media controls, isolate cached service-worker builds, and fix
+  formatter-tooling dependency advisories with scoped overrides.
 
 ## [0.3.2] - 2026-11-12
 
