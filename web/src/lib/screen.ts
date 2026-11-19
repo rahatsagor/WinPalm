@@ -5,7 +5,7 @@ import { onMessage, send, state as connection } from './connection'
 import { releaseAll } from './input'
 import type { DisplayInfo, DisplayQuality } from './protocol'
 import { settings } from './settings'
-import { ScreenImageAssembler } from './screenImages'
+import { ScreenImageAssembler, ScreenImageRenderer } from './screenImages'
 
 export const screen = reactive({
   active: false,
@@ -29,8 +29,8 @@ export const displayControls = computed({
 })
 
 let video: HTMLVideoElement | null = null
-let picture: HTMLImageElement | null = null
-let pictureURL: string | null = null
+let picture: HTMLCanvasElement | null = null
+let renderer: ScreenImageRenderer | null = null
 let channel: RTCDataChannel | null = null
 const images = new ScreenImageAssembler()
 let peer: RTCPeerConnection | null = null
@@ -88,9 +88,9 @@ function closeStream(notify = true) {
   disconnected = undefined
   if (channel) { channel.onmessage = null; channel.onclose = null; channel.close(); channel = null }
   images.reset()
-  if (picture) { picture.onload = null; picture.onerror = null; picture.removeAttribute('src') }
-  if (pictureURL) URL.revokeObjectURL(pictureURL)
-  pictureURL = null
+  renderer?.stop()
+  renderer = null
+  if (picture) { picture.width = 0; picture.height = 0 }
   const id = streamId
   streamId = null
   if (notify && id !== null) send({ t: 'displayStop', id })
@@ -216,42 +216,45 @@ export async function startViewing() {
       channel = data
       data.binaryType = 'arraybuffer'
       data.onclose = () => { if (current === generation) fail('The HD text connection ended. Start viewing again.') }
-      data.onmessage = event => {
-        if (current !== generation || !canView() || !picture) return
-        try {
-          if (!(event.data instanceof ArrayBuffer)) throw new Error('Unsupported picture format')
-          const png = images.push(event.data)
-          if (!png) return
-          const url = URL.createObjectURL(new Blob([png], { type: 'image/png' }))
-          if (pictureURL) URL.revokeObjectURL(pictureURL)
-          pictureURL = url
-          picture.onload = () => {
-            if (current !== generation || !canView() || pictureURL !== url) return
-            clearTimeout(timeout)
-            screen.status = 'live'
-            screen.message = ''
-          }
-          picture.onerror = () => { if (current === generation && pictureURL === url) fail('The HD picture could not be displayed. Try Sharper text.') }
-          picture.src = url
-        } catch { fail('The HD picture could not be received safely. Try Sharper text or reconnect.') }
-      }
-    } else {
-    const transceiver = rtc.addTransceiver('video', { direction: 'recvonly' })
-    const capabilities = typeof RTCRtpReceiver !== 'undefined' ? RTCRtpReceiver.getCapabilities?.('video') : undefined
-    const codecs = capabilities?.codecs.filter(codec => ['video/h264', 'video/rtx'].includes(codec.mimeType.toLowerCase()))
-    if (codecs?.some(codec => codec.mimeType.toLowerCase() === 'video/h264') && typeof transceiver.setCodecPreferences === 'function') transceiver.setCodecPreferences(codecs)
-    rtc.ontrack = event => {
-      if (current !== generation || !canView() || !video) { event.track.stop(); return }
-      video.srcObject = event.streams[0] ?? new MediaStream([event.track])
-      video.onplaying = () => {
-        if (current !== generation || !canView()) return
+      renderer = new ScreenImageRenderer(picture!, () => {
         clearTimeout(timeout)
         screen.status = 'live'
         screen.message = ''
-        screen.needsPlay = false
+      }, fail)
+      data.onmessage = event => {
+        if (current !== generation || !canView()) return
+        try {
+          if (!(event.data instanceof ArrayBuffer)) throw new Error('Unsupported picture format')
+          const frame = images.push(event.data)
+          if (frame) renderer?.receive(frame)
+        } catch { fail('The HD picture could not be received safely. Try Sharper text or reconnect.') }
       }
-      void playViewing()
-    }
+    } else {
+      const transceiver = rtc.addTransceiver('video', { direction: 'recvonly' })
+      const capabilities = typeof RTCRtpReceiver !== 'undefined' ? RTCRtpReceiver.getCapabilities?.('video') : undefined
+      const codecs = capabilities?.codecs.filter(codec => ['video/h264', 'video/rtx'].includes(codec.mimeType.toLowerCase()))
+      if (codecs?.some(codec => codec.mimeType.toLowerCase() === 'video/h264') && typeof transceiver.setCodecPreferences === 'function') transceiver.setCodecPreferences(codecs)
+      rtc.ontrack = event => {
+        if (current !== generation || !canView() || !video) { event.track.stop(); return }
+        const receiver = event.receiver as (RTCRtpReceiver & { playoutDelayHint?: number; jitterBufferTarget?: number | null }) | undefined
+        if (receiver) {
+          try {
+            if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0
+            if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0
+          } catch {
+            // Ignore browsers that expose read-only or stricter jitter-buffer hints.
+          }
+        }
+        video.srcObject = event.streams[0] ?? new MediaStream([event.track])
+        video.onplaying = () => {
+          if (current !== generation || !canView()) return
+          clearTimeout(timeout)
+          screen.status = 'live'
+          screen.message = ''
+          screen.needsPlay = false
+        }
+        void playViewing()
+      }
     }
     rtc.onconnectionstatechange = () => {
       if (current !== generation) return
@@ -266,13 +269,13 @@ export async function startViewing() {
       } else if (rtc.connectionState === 'connected') screen.message = ''
     }
     timeout = setTimeout(() => {
-      if (current === generation) fail('Video did not start. Check Screen Recording permission on the PC and that your network allows a direct video connection.')
+      if (current === generation) fail('Video did not start. Check Allow screen mirroring on the PC and that your network allows a direct video connection.')
     }, 17_000)
     await rtc.setLocalDescription(await rtc.createOffer())
     await gathered(rtc)
     if (current !== generation || !canView()) return
     const sdp = rtc.localDescription?.sdp
-    if (!sdp || !send({ t: 'displayStart', id, displayId: settings.displayId, quality: settings.displayQuality, sdp })) {
+    if (!sdp || !send({ t: 'displayStart', id, displayId: settings.displayId, quality: settings.displayQuality, sdp, ...(screen.original ? { patches: true } : {}) })) {
       fail('The PC is not connected.')
       return
     }
@@ -290,7 +293,7 @@ export function focusDisplay() {
   if (streamId !== null && screen.status === 'live' && connection.features.permission) send({ t: 'displayFocus', id: streamId })
 }
 
-export function activateScreen(element: HTMLVideoElement, image?: HTMLImageElement) {
+export function activateScreen(element: HTMLVideoElement, image?: HTMLCanvasElement) {
   video = element
   picture = image ?? null
   if (screen.active) return

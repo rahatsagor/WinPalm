@@ -19,7 +19,7 @@ class FakePeer extends EventTarget {
   connectionState = 'new'
   localDescription: { type: string; sdp: string } | null = null
   remoteDescription: unknown = null
-  ontrack: ((event: { track: { stop: () => void }; streams: unknown[] }) => void) | null = null
+  ontrack: ((event: { track: { stop: () => void }; streams: unknown[]; receiver?: { playoutDelayHint?: number; jitterBufferTarget?: number | null } }) => void) | null = null
   onconnectionstatechange: (() => void) | null = null
   closed = false
   transceiver = { setCodecPreferences: vi.fn() }
@@ -86,6 +86,19 @@ describe('receive-only display viewing', () => {
     socket.receive({ t: 'displayState', id: start.id, state: 'answer', sdp: 'answer', message: null })
     expect(rtc.setRemoteDescription).toHaveBeenCalledWith({ type: 'answer', sdp: 'answer' })
     expect(library.screen.status).toBe('connecting')
+  })
+
+  it('sets zero playout delay hints on incoming video receivers when supported', async () => {
+    const socket = connect()
+    library.activateScreen(video)
+    list(socket)
+    await library.startViewing()
+    const rtc = FakePeer.all[0]!
+    const receiver = { playoutDelayHint: 0.25, jitterBufferTarget: 150 }
+    Object.defineProperty(video, 'srcObject', { configurable: true, writable: true, value: null })
+    rtc.ontrack!({ track: { stop: vi.fn() }, streams: [{ getTracks: () => [] }], receiver })
+    expect(receiver.playoutDelayHint).toBe(0)
+    expect(receiver.jitterBufferTarget).toBe(0)
   })
 
   it('keeps an active stream through repeated unrelated feature updates for more than ten seconds', async () => {
@@ -354,9 +367,12 @@ describe('receive-only display viewing', () => {
   })
 
   it('receives lossless pictures over a data-only peer on HTTP and revokes them on stop', async () => {
-    const socket = connect(); const image = document.createElement('img')
-    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:hd-frame')
-    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const socket = connect(); const image = document.createElement('canvas')
+    const drawImage = vi.fn()
+    Object.defineProperty(image, 'getContext', { value: () => ({ drawImage }) })
+    const bitmap = { close: vi.fn() }
+    const decode = vi.fn(async () => bitmap)
+    vi.stubGlobal('createImageBitmap', decode)
     const { settings } = await import('../src/lib/settings'); settings.displayQuality = 'original'
     library.activateScreen(video, image); list(socket); await library.startViewing()
     const rtc = FakePeer.all[0]!
@@ -369,23 +385,24 @@ describe('receive-only display viewing', () => {
     view.setUint32(24, 13); view.setUint32(28, 0x49484452); view.setUint32(32, 1920); view.setUint32(36, 1080)
     const handler = rtc.channel.onmessage!
     handler({ data: bytes.buffer })
-    expect(create).toHaveBeenCalledOnce()
-    image.dispatchEvent(new Event('load'))
+    await Promise.resolve()
+    expect(socket.sent.find(m => m.t === 'displayStart')).toMatchObject({ patches: true })
+    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0)
+    expect([image.width, image.height]).toEqual([1920, 1080])
+    expect(bitmap.close).toHaveBeenCalledOnce()
     expect(library.screen.status).toBe('live')
     expect(library.screen.original).toBe(true)
     library.stopViewing()
-    expect(revoke).toHaveBeenCalledWith('blob:hd-frame')
-    expect(image.getAttribute('src')).toBeNull()
+    expect([image.width, image.height]).toEqual([0, 0])
     expect(rtc.channel.closed).toBe(true)
     handler({ data: bytes.buffer })
-    expect(create).toHaveBeenCalledOnce()
-    create.mockRestore(); revoke.mockRestore()
+    expect(decode).toHaveBeenCalledOnce()
   })
 
   it('rejects HD text on hosts without its capability', async () => {
     const socket = connect(); connection.state.features.displayOriginal = undefined
     const { settings } = await import('../src/lib/settings'); settings.displayQuality = 'original'
-    library.activateScreen(video, document.createElement('img')); list(socket); await library.startViewing()
+    library.activateScreen(video, document.createElement('canvas')); list(socket); await library.startViewing()
     expect(library.screen.message).toContain('Update WinPalm')
     expect(FakePeer.all).toHaveLength(0)
   })

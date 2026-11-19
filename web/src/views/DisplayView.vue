@@ -13,7 +13,7 @@ import { settings } from '@/lib/settings'
 import KeyboardView from './KeyboardView.vue'
 
 const video = ref<HTMLVideoElement>()
-const picture = ref<HTMLImageElement>()
+const picture = ref<HTMLCanvasElement>()
 const displayArea = ref<HTMLElement>()
 const body = ref<HTMLElement>()
 const preview = ref<HTMLElement>()
@@ -41,11 +41,20 @@ const previewLength = computed(() => {
 const previewStyle = computed(() => settings.displayControls === 'view' ? { flex: '1 1 0%' } : { flex: `0 0 ${previewLength.value}px` })
 const controlsHeight = computed(() => wide.value ? size.height : Math.max(0, size.height - previewLength.value - 8))
 const compactPreview = computed(() => !fullView.value && settings.displayControls !== 'view' && (wide.value ? size.height : previewLength.value) < 140)
-const maxZoom = computed(() => screen.original ? 8 : 4)
+const media = reactive({ width: 0, height: 0 })
+const previewSize = reactive({ width: 0, height: 0 })
+const maxZoom = computed(() => {
+  const floor = screen.original ? 8 : 4
+  const ceiling = screen.original ? 12 : 8
+  if (!media.width || !media.height || !previewSize.width || !previewSize.height) return floor
+  const fit = Math.min(previewSize.width / media.width, previewSize.height / media.height)
+  if (!Number.isFinite(fit) || fit <= 0) return floor
+  return Math.max(floor, Math.min(ceiling, Math.round((4 / fit) * 10) / 10))
+})
 const placeholder = computed(() => {
   if (screen.status === 'loading') return 'Finding displays…'
   if (screen.needsPlay) return 'Tap to show the display'
-  if (screen.status === 'connecting') return 'Connecting video…'
+  if (screen.status === 'connecting') return screen.original ? 'Connecting HD view…' : 'Connecting video…'
   if (screen.message) return screen.message
   if (display.value) return 'Start viewing to see this display.'
   return 'Choose a display to start viewing.'
@@ -119,10 +128,16 @@ function fullscreenKeys(event: KeyboardEvent) {
   }
 }
 onMounted(() => {
-  observer = new ResizeObserver(([entry]) => {
-    if (entry) { size.width = entry.contentRect.width; size.height = entry.contentRect.height; clampPan() }
+  observer = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const target = entry.target === preview.value ? previewSize : size
+      target.width = entry.contentRect.width
+      target.height = entry.contentRect.height
+    }
+    clampPan()
   })
   if (body.value) observer.observe(body.value)
+  if (preview.value) observer.observe(preview.value)
   document.addEventListener('fullscreenchange', fullscreenChanged)
   addEventListener('keydown', fullscreenKeys, true)
   activate()
@@ -150,9 +165,12 @@ function chooseDisplay(id: string) {
 
 function clampPan() {
   const element = preview.value
-  const width = screen.original ? picture.value?.naturalWidth : video.value?.videoWidth
-  const height = screen.original ? picture.value?.naturalHeight : video.value?.videoHeight
+  const width = screen.original ? picture.value?.width : video.value?.videoWidth
+  const height = screen.original ? picture.value?.height : video.value?.videoHeight
+  media.width = width || 0
+  media.height = height || 0
   if (!element || !width || !height) { pan.x = 0; pan.y = 0; return }
+  if (zoom.value > maxZoom.value) zoom.value = maxZoom.value
   const fit = Math.min(element.clientWidth / width, element.clientHeight / height)
   const x = Math.max(0, (width * fit * zoom.value - element.clientWidth) / 2)
   const y = Math.max(0, (height * fit * zoom.value - element.clientHeight) / 2)
@@ -260,7 +278,7 @@ function up(event: PointerEvent) { pointers.delete(event.pointerId); beginGestur
         :style="fullView ? undefined : previewStyle"
       >
         <div v-if="fullView" class="absolute inset-x-2 top-[env(safe-area-inset-top)] flex h-12 items-center justify-between gap-2 text-white">
-          <span class="min-w-0 truncate px-2 text-[13px]">{{ display?.name }}{{ screen.original ? ' · HD text · 1/sec' : '' }}</span>
+          <span class="min-w-0 truncate px-2 text-[13px]">{{ display?.name }}{{ screen.original ? ' · HD text · lossless' : '' }}</span>
           <button type="button" class="flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px]" @click="stopViewing()"><Square :size="15" />Stop</button>
           <button type="button" class="flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px]" @click="leaveFullscreen()"><Minimize :size="17" />Exit</button>
         </div>
@@ -282,19 +300,20 @@ function up(event: PointerEvent) { pointers.delete(event.pointerId); beginGestur
           playsinline
           disablepictureinpicture
           class="h-full w-full object-contain"
+          :class="{ 'opacity-0': !live }"
           :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }"
           aria-label="Live view of the selected PC display"
           @loadedmetadata="clampPan"
         />
-        <img
+        <canvas
           ref="picture"
-          v-show="streaming && screen.original"
-          alt="Lossless HD view of the selected PC display"
-          draggable="false"
+          v-show="live && screen.original"
+          role="img"
+          aria-label="Lossless HD view of the selected PC display"
           class="h-full w-full object-contain"
           :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }"
           @load="clampPan"
-        >
+        />
         <div v-if="!live" class="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-y-auto px-5 py-3 text-center text-[#d7dce2]" role="status" aria-live="polite">
           <Monitor :size="28" :class="{ 'animate-pulse': screen.status === 'connecting' || screen.status === 'loading' }" class="shrink-0 opacity-50" aria-hidden="true" />
           <p class="max-w-sm text-[13px] leading-relaxed">{{ placeholder }}</p>
