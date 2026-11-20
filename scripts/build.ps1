@@ -45,12 +45,7 @@ try {
         Run { bun (Join-Path $Web 'node_modules/oxlint/bin/oxlint') scripts }
         Run { bun (Join-Path $Web 'node_modules/typescript/bin/tsc') --project scripts --typeRoots (Join-Path $Web 'node_modules/@types') }
         Run { bun test scripts }
-        Run { dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path (Join-Path $Cache 'dotnet-update-tests') }
-        Run { cargo fmt --all --check }
-        Run { cargo clippy --locked --all-targets -- -D warnings }
-        Run { cargo test --locked --all-targets }
     }
-    Run { cargo build --locked --release --target $Target }
     Run { cargo fetch --locked --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc }
     # A native SDK can satisfy its app host from a preinstalled pack, omitting
     # it from NuGet download metadata. Resolve all publish packs via NuGet so
@@ -66,6 +61,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not locate restored dependency metadata.' }
     Run { bun scripts/license-notices.ts --output THIRD_PARTY_NOTICES.md --nuget-assets $Assets --check }
     if (!(Test-Path (Join-Path $Output 'THIRD_PARTY_NOTICES.md'))) { throw 'Missing bundled license notices.' }
+    if (!$SkipChecks) {
+        Run { dotnet run --project windows/WinPalm.UpdateTests -c Release --artifacts-path (Join-Path $Cache 'dotnet-update-tests') }
+        Run { cargo fmt --all --check }
+        Run { cargo clippy --locked --all-targets -- -D warnings }
+        Run { cargo test --locked --all-targets }
+    }
+    Run { cargo build --locked --release --target $Target }
     # Serve the exact working source alongside the phone UI (AGPL section 13).
     $Version = (Get-Content (Join-Path $Root 'web/package.json') -Raw | ConvertFrom-Json).version
     $SourceArchive = Join-Path $Dev "artifacts/WinPalm-$Version-source.zip"

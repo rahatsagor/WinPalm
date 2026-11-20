@@ -156,7 +156,18 @@ const content = normalized([...sections, ...appendix].join('\n\n' + '='.repeat(7
 if (content.includes(homedir()) || content.includes(root)) throw new Error('Build-machine paths must not appear in bundled notices')
 const output = resolve(values.output)
 if (values.check) {
-  if (readFileSync(output, 'utf8') !== content) throw new Error('Bundled notices are stale. Regenerate with the same arguments without --check and review the upstream changes.')
+  const bundled = readFileSync(output, 'utf8')
+  if (bundled !== content) {
+    const expected = bundled.split('\n'), generated = content.split('\n')
+    const first = expected.findIndex((line, index) => line !== generated[index])
+    const index = first < 0 ? expected.length : first
+    const sources = (text: string) => new Set(text.match(/^Source: https?:\S+$/gm) ?? [])
+    const bundledSources = sources(bundled), generatedSources = sources(content)
+    for (const source of bundledSources.difference(generatedSources)) console.error(`Only in bundled notices: ${source}`)
+    for (const source of generatedSources.difference(bundledSources)) console.error(`Only in generated notices: ${source}`)
+    console.error(`First difference at line ${index + 1}\n  Bundled: ${JSON.stringify(expected[index])}\n  Generated: ${JSON.stringify(generated[index])}`)
+    throw new Error('Bundled notices are stale. Regenerate with the same arguments without --check and review the upstream changes.')
+  }
 } else {
   mkdirSync(dirname(output), { recursive: true })
   writeFileSync(output, content)
