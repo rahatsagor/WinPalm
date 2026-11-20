@@ -1669,6 +1669,7 @@ fn screen_video_negotiates_over_plain_websocket_and_stops_before_accepting_late_
         let local = socket.local_addr().unwrap();
         let mut builder = Rtc::builder();
         builder.codec_config().clear();
+        builder.codec_config().add_h264(114.into(), Some(115.into()), true, 0x640c2a);
         builder.codec_config().add_h264(108.into(), Some(109.into()), true, 0x42e01f);
         let mut receiver = builder.build(Instant::now());
         receiver.add_local_candidate(Candidate::host(local, "udp").unwrap());
@@ -1689,13 +1690,22 @@ fn screen_video_negotiates_over_plain_websocket_and_stops_before_accepting_late_
         let began = Instant::now();
         let mut generation = None;
         let mut timestamp = 0;
-        let received = 'video: loop {
+        let mut received_high = false;
+        'video: loop {
             assert!(began.elapsed() < Duration::from_secs(5), "the encrypted video transport never delivered a frame");
             let deadline = loop {
                 match receiver.poll_output().unwrap() {
                     Output::Timeout(deadline) => break deadline,
                     Output::Transmit(packet) => { socket.send_to(&packet.contents, packet.destination).await.unwrap(); }
-                    Output::Event(Event::MediaData(data)) => break 'video data.data,
+                    Output::Event(Event::MediaData(data)) => {
+                        assert!(!data.data.is_empty());
+                        if !received_high {
+                            assert_eq!(*data.pt, 114);
+                            received_high = true;
+                        } else if *data.pt == 108 {
+                            break 'video;
+                        }
+                    }
                     _ => {}
                 }
             };
@@ -1713,19 +1723,20 @@ fn screen_video_negotiates_over_plain_websocket_and_stops_before_accepting_late_
                     if let Some(generation) = generation {
                         // Minimal IDR payload: the transport test verifies
                         // packetization/decryption, not an H.264 decoder.
-                        f.host.display_frame(session, generation, vec![0,0,0,1,0x65,0x88,0x84,0x21], timestamp, true);
+                        let (profile, constraints) = if received_high { (0x42, 0xc0) } else { (0x64, 0x0c) };
+                        let keyframe = vec![0,0,0,1,0x67,profile,constraints,31,0x80,0,0,0,1,0x65,0x88,0x84,0x21];
+                        f.host.display_frame(session, generation, keyframe, timestamp, true);
                         timestamp += 33_333;
                     }
                 }
                 _ = tokio::time::sleep_until(deadline.into()) => { receiver.handle_input(Input::Timeout(Instant::now())).unwrap(); }
             }
-        };
-        assert!(!received.is_empty());
+        }
         let generation = generation.expect("capture must start only after video negotiation");
         send(&mut ws, json!({"t":"displayStop", "id":1})).await;
         send(&mut ws, json!({"t":"ping", "id":987})).await;
         recv_kind(&mut ws, "pong").await;
-        assert!(f.host.display_frame(session, generation, vec![0,0,0,1,0x65,0x88,0x84,0x21], timestamp, true), "an old stop cannot cancel the current view");
+        assert!(f.host.display_frame(session, generation, vec![0,0,0,1,0x67,0x42,0xc0,31,0x80,0,0,0,1,0x65,0x88,0x84,0x21], timestamp, true), "an old stop cannot cancel the current view");
         if end != "stop" {
             assert!(f.host.display_capture_active(session, generation));
             match end {

@@ -17,6 +17,7 @@ mod display_pixels;
 #[cfg(windows)]
 mod display_windows;
 pub mod ffi;
+mod h264;
 pub mod host;
 pub mod input;
 pub mod keycodes;

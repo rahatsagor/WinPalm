@@ -11,13 +11,13 @@ use std::time::{Duration, Instant};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::format::Codec;
-use str0m::media::{Direction, MediaKind, MediaTime};
+use str0m::media::{Direction, MediaKind, MediaTime, Pt};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{Notify, mpsc, watch};
 
-use crate::api::{DisplayApprovalRequest, DisplayCommand, DisplayProfile, HostEvent};
+use crate::api::{DisplayApprovalRequest, DisplayCommand, DisplayVideoFormat, HostEvent};
 use crate::host::{Outgoing, Shared};
 use crate::protocol::{DisplayInfo, DisplayQuality, ServerMessage};
 
@@ -661,7 +661,7 @@ fn capture_limits(quality: DisplayQuality, level: u8) -> (u32, u32, u32) {
         return (3840, 4, 0);
     }
     if level < 31 {
-        return (352, 15, 400_000);
+        return (352, 15, 350_000);
     }
     match quality {
         DisplayQuality::Auto if level >= 32 => (1280, 60, 8_000_000),
@@ -673,23 +673,25 @@ fn capture_limits(quality: DisplayQuality, level: u8) -> (u32, u32, u32) {
     }
 }
 
-fn h264_profile(profile_level_id: Option<u32>) -> (u8, DisplayProfile) {
-    match profile_level_id.unwrap_or(0x42e01f) >> 8 {
-        0x640c => (3, DisplayProfile::ConstrainedHigh),
-        0x6400 => (2, DisplayProfile::ConstrainedHigh),
-        0x4d00 => (1, DisplayProfile::Main),
-        _ => (0, DisplayProfile::ConstrainedBaseline),
-    }
-}
-
-fn receiver_level(sdp: &str, pt: u8) -> u8 {
+fn offered_format(sdp: &str, pt: u8) -> Option<DisplayVideoFormat> {
     let prefix = format!("a=fmtp:{pt} ");
-    sdp.lines()
+    let id = sdp
+        .lines()
         .find_map(|line| line.trim().strip_prefix(&prefix))
         .and_then(|params| params.split(';').find_map(|param| param.trim().strip_prefix("profile-level-id=")))
-        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-        .map(|value| value as u8)
-        .unwrap_or(31)
+        .unwrap_or("42e01f");
+    let mut format = DisplayVideoFormat::from_profile_level_id(u32::from_str_radix(id, 16).ok()?)?;
+    format.level = format.level.min(42);
+    Some(format)
+}
+
+fn payload_for_keyframe(formats: &[(Pt, DisplayVideoFormat)], data: &[u8]) -> Option<Pt> {
+    let mut headers = crate::h264::h264_sequence_profiles(data);
+    let sequence = DisplayVideoFormat::from_profile_level_id(headers.next()??)?;
+    if !headers.all(|id| id.and_then(DisplayVideoFormat::from_profile_level_id) == Some(sequence)) {
+        return None;
+    }
+    formats.iter().find(|(_, format)| format.accepts(sequence)).map(|(pt, _)| *pt)
 }
 
 struct Endpoint {
@@ -851,6 +853,8 @@ async fn run(
         },
     );
     let mut media = None;
+    let mut formats = Vec::new();
+    let mut video_payload = None;
     let mut connected = false;
     let mut capture_started = false;
     let mut image_channel = None;
@@ -947,19 +951,21 @@ async fn run(
                     if added.direction != Direction::SendOnly {
                         return Err("The browser requested an unsupported video connection.".into());
                     }
-                    let chosen = rtc.writer(added.mid).and_then(|writer| {
-                        writer
-                            .payload_params()
-                            .filter(|p| p.spec().codec == Codec::H264)
-                            .max_by_key(|p| h264_profile(p.spec().format.profile_level_id).0)
-                            .map(|p| (p.pt(), h264_profile(p.spec().format.profile_level_id).1))
-                    });
-                    let Some((pt, profile)) = chosen else {
+                    if let Some(writer) = rtc.writer(added.mid) {
+                        formats.extend(
+                            writer
+                                .payload_params()
+                                .filter(|p| p.spec().codec == Codec::H264)
+                                .filter_map(|p| offered_format(&offer_text, *p.pt()).map(|format| (p.pt(), format))),
+                        );
+                    }
+                    formats.sort_by_key(|(_, format)| std::cmp::Reverse((format.profile, format.level)));
+                    let Some(level) = formats.iter().map(|(_, format)| format.level).min() else {
                         return Err("This browser did not offer compatible H.264 video.".into());
                     };
-                    let level = receiver_level(&offer_text, *pt);
+                    // A fallback can switch profiles on an IDR without changing capture geometry.
                     let (dimension, fps, bitrate) = capture_limits(quality, level);
-                    media = Some((added.mid, pt, dimension, profile));
+                    media = Some((added.mid, dimension));
                     maximum_bitrate = bitrate;
                     current_bitrate = bitrate;
                     maximum_fps = fps;
@@ -1034,7 +1040,7 @@ async fn run(
                         bitrate: 0,
                         original: true,
                         patches,
-                        profile: DisplayProfile::ConstrainedBaseline,
+                        video_formats: vec![],
                     },
                 );
                 shared.send_to(session, state(request, "streaming", None));
@@ -1042,7 +1048,7 @@ async fn run(
             if !original
                 && connected
                 && !capture_started
-                && let Some((_, _, max_dimension, profile)) = media
+                && let Some((_, max_dimension)) = media
             {
                 capture_started = true;
                 shared.delegate.display_command(
@@ -1055,7 +1061,7 @@ async fn run(
                         bitrate: current_bitrate,
                         original: false,
                         patches: false,
-                        profile,
+                        video_formats: formats.iter().map(|(_, format)| *format).collect(),
                     },
                 );
                 shared.send_to(session, state(request, "streaming", None));
@@ -1086,8 +1092,12 @@ async fn run(
                     continue;
                 }
                 if waiting_for_keyframe && !frame.keyframe { continue; }
-                if frame.keyframe { waiting_for_keyframe = false; }
-                if let Some((mid, pt, _, _)) = media {
+                if frame.keyframe {
+                    video_payload = Some(payload_for_keyframe(&formats, &frame.data)
+                        .ok_or("The encoder returned video outside the browser's negotiated H.264 formats.")?);
+                    waiting_for_keyframe = false;
+                }
+                if let (Some((mid, _)), Some(pt)) = (media, video_payload) {
                     rtc.writer(mid).ok_or("The video track ended.")?.write(pt, Instant::now(), MediaTime::from_micros(frame.timestamp_us), frame.data).map_err(|e| e.to_string())?;
                     sent_video = true;
                 }
@@ -1120,24 +1130,27 @@ mod tests {
         assert_eq!(capture_limits(DisplayQuality::Sharp, 31), (1280, 30, 6_000_000));
         assert_eq!(capture_limits(DisplayQuality::Sharp, 40), (1920, 30, 12_000_000));
         assert_eq!(capture_limits(DisplayQuality::Original, 31), (3840, 4, 0));
-        assert_eq!(receiver_level("a=fmtp:108 packetization-mode=1; profile-level-id=42e020\r\n", 108), 32);
-        assert_eq!(receiver_level("a=fmtp:109 profile-level-id=42e02a\r\n", 108), 31);
+        assert_eq!(
+            offered_format("a=fmtp:108 packetization-mode=1; profile-level-id=42e020\r\n", 108).unwrap().level,
+            32
+        );
+        assert_eq!(offered_format("a=fmtp:109 profile-level-id=42e02a\r\n", 108).unwrap().level, 31);
     }
 
     #[test]
-    fn h264_profile_ranking_prefers_cabac_profiles_over_baseline() {
-        let ch = h264_profile(Some(0x640c2a));
-        let high = h264_profile(Some(0x64002a));
-        let main = h264_profile(Some(0x4d002a));
-        let cb = h264_profile(Some(0x42e01f));
-        let unknown = h264_profile(None);
-
-        assert_eq!(ch.1, DisplayProfile::ConstrainedHigh);
-        assert_eq!(high.1, DisplayProfile::ConstrainedHigh);
-        assert_eq!(main.1, DisplayProfile::Main);
-        assert_eq!(cb.1, DisplayProfile::ConstrainedBaseline);
-        assert_eq!(unknown.1, DisplayProfile::ConstrainedBaseline);
-        assert!(ch.0 > high.0 && high.0 > main.0 && main.0 > cb.0);
+    fn encoder_fallback_uses_only_the_payload_that_matches_its_sps() {
+        let formats =
+            [0x640c2a, 0x64002a, 0x4d001f, 0x42e01f].map(|id| DisplayVideoFormat::from_profile_level_id(id).unwrap());
+        let negotiated = [114, 112, 123, 108].map(Pt::from).into_iter().zip(formats).collect::<Vec<_>>();
+        let keyframe = |profile, flags, level| [0, 0, 0, 1, 0x67, profile, flags, level, 0x80, 0, 0, 1, 0x65, 0x88];
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x64, 0x0c, 40)), Some(114.into()));
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x64, 0, 40)), Some(112.into()));
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x4d, 0x40, 31)), Some(123.into()));
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x42, 0xc0, 30)), Some(108.into()));
+        assert_eq!(payload_for_keyframe(&negotiated[..1], &keyframe(0x64, 0, 40)), None);
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x42, 0, 31)), None);
+        assert_eq!(payload_for_keyframe(&negotiated, &keyframe(0x42, 0xc0, 32)), None);
+        assert_eq!(payload_for_keyframe(&negotiated, &[0, 0, 1, 0x65, 0x88]), None);
     }
 
     #[test]
