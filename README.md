@@ -255,7 +255,8 @@ sleeps. No desktop audio or screen recording.
 
 Tap the phone’s **Settings** gear to open **Trackpad**, **Gestures**, **Keyboard**,
 **Display** and **Deck**. The connection card shows the PC name, WinPalm version,
-connection status and latency. Use **Keyboard → Dictation setup** for microphone
+connection status, latency and whether the connection is encrypted. Use
+**Keyboard → Dictation setup** for microphone
 and trusted HTTPS help. **Display** sets viewing quality, controls and preview
 space. **Deck** sets button size on this device.
 

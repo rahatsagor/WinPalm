@@ -1,6 +1,6 @@
 //! Bounded Media Foundation H.264 encoding. Hardware MFTs are preferred;
 //! incompatible drivers fall back to Microsoft's synchronous encoder.
-use crate::api::DisplayProfile;
+use crate::api::{DisplayProfile, DisplayVideoFormat};
 use crate::display_capture_state::EncoderQueue;
 use crate::display_pixels as pixels;
 use std::mem::ManuallyDrop;
@@ -44,35 +44,33 @@ pub(super) struct Encoder {
     have_output: u32,
     fps: u32,
     sequence: Vec<u8>,
+    format: DisplayVideoFormat,
     queue: EncoderQueue,
     hardware: bool,
     wide_rate_limit: bool,
     _platform: MediaPlatform,
 }
 impl Encoder {
-    pub(super) fn new(size: (u32, u32), fps: u32, bitrate: u32, profile: DisplayProfile) -> Result<Self> {
-        Self::create(size, fps, bitrate, profile, true)
+    pub(super) fn new(size: (u32, u32), fps: u32, bitrate: u32, formats: &[DisplayVideoFormat]) -> Result<Self> {
+        Self::create(size, fps, bitrate, formats, true)
     }
-    pub(super) fn software(size: (u32, u32), fps: u32, bitrate: u32, profile: DisplayProfile) -> Result<Self> {
-        Self::create(size, fps, bitrate, profile, false)
+    pub(super) fn software(size: (u32, u32), fps: u32, bitrate: u32, formats: &[DisplayVideoFormat]) -> Result<Self> {
+        Self::create(size, fps, bitrate, formats, false)
     }
     pub(super) fn hardware(&self) -> bool {
         self.hardware
     }
-    fn profile_candidates(profile: DisplayProfile) -> &'static [u32] {
-        // Never upgrade above the negotiated profile; fall back to lower H.264
-        // profiles (all with B-frames disabled) when a driver rejects High/Main.
-        match profile {
-            DisplayProfile::ConstrainedHigh => &[100, 77, 66],
-            DisplayProfile::Main => &[77, 66],
-            DisplayProfile::ConstrainedBaseline => &[66],
-        }
+    pub(super) fn format(&self) -> DisplayVideoFormat {
+        self.format
+    }
+    pub(super) fn retire_input(&mut self, timestamp: u64) {
+        self.queue.retire(timestamp);
     }
     fn create(
         size: (u32, u32),
         fps: u32,
         bitrate: u32,
-        profile: DisplayProfile,
+        formats: &[DisplayVideoFormat],
         prefer_hardware: bool,
     ) -> Result<Self> {
         let platform = MediaPlatform::new()?;
@@ -104,7 +102,7 @@ impl Encoder {
             }
             for activation in hardware {
                 if let Ok(transform) = activation.ActivateObject::<IMFTransform>() {
-                    if let Ok((codec, events)) = Self::configure(&transform, size, fps, bitrate, profile) {
+                    if let Ok((codec, events, format)) = Self::configure(&transform, size, fps, bitrate, formats) {
                         return Ok(Self {
                             transform,
                             codec,
@@ -114,6 +112,7 @@ impl Encoder {
                             have_output: 0,
                             fps,
                             sequence: vec![],
+                            format,
                             queue: EncoderQueue::default(),
                             hardware: true,
                             wide_rate_limit: false,
@@ -127,7 +126,10 @@ impl Encoder {
             let transform: IMFTransform = CoCreateInstance(&CMSH264EncoderMFT, None, CLSCTX_INPROC_SERVER).map_err(
                 |_| "H.264 encoding is unavailable on this PC. Try HD text or install the Windows media components.",
             )?;
-            let (codec, events) = Self::configure(&transform, size, fps, bitrate, profile).map_err(|_| {
+            // Microsoft's baseline encoder provides the broadest fallback.
+            let mut formats = formats.to_vec();
+            formats.sort_by_key(|format| format.profile != DisplayProfile::ConstrainedBaseline);
+            let (codec, events, format) = Self::configure(&transform, size, fps, bitrate, &formats).map_err(|_| {
                 Self::shutdown(&transform);
                 "Windows could not prepare H.264 video. Try Save battery or HD text."
             })?;
@@ -140,6 +142,7 @@ impl Encoder {
                 have_output: 0,
                 fps,
                 sequence: vec![],
+                format,
                 queue: EncoderQueue::default(),
                 hardware: false,
                 wide_rate_limit: false,
@@ -152,8 +155,8 @@ impl Encoder {
         size: (u32, u32),
         fps: u32,
         bitrate: u32,
-        profile: DisplayProfile,
-    ) -> windows::core::Result<(Option<ICodecAPI>, Option<IMFMediaEventGenerator>)> {
+        formats: &[DisplayVideoFormat],
+    ) -> windows::core::Result<(Option<ICodecAPI>, Option<IMFMediaEventGenerator>, DisplayVideoFormat)> {
         unsafe {
             let attributes = transform.GetAttributes()?;
             let asynchronous = attributes.GetUINT32(&MF_TRANSFORM_ASYNC).unwrap_or(0) != 0;
@@ -163,7 +166,7 @@ impl Encoder {
             let codec = Some(transform.cast::<ICodecAPI>()?);
             if let Some(codec) = &codec {
                 codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true))?;
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
+
                 // Relax periodic IDR interval to 30s; PLI/FIR still triggers immediate keyframes.
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps.saturating_mul(30)));
                 let _ = codec.SetValue(&CODECAPI_AVEncNumWorkerThreads, &VARIANT::from(2u32));
@@ -173,26 +176,31 @@ impl Encoder {
                 // H.264 specifies this property in bytes, not bits.
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonBufferSize, &VARIANT::from(bitrate / 8 * 5 / 4));
             }
-            let mut chosen_profile = None;
-            let mut last_err = None;
-            for &profile_idc in Self::profile_candidates(profile) {
+            let mut chosen = None;
+            for &format in formats {
+                let profile = match format.profile {
+                    DisplayProfile::ConstrainedBaseline => eAVEncH264VProfile_Base,
+                    DisplayProfile::Main => eAVEncH264VProfile_Main,
+                    DisplayProfile::High => eAVEncH264VProfile_High,
+                    DisplayProfile::ConstrainedHigh => eAVEncH264VProfile_UCConstrainedHigh,
+                };
+                let cabac = format.profile != DisplayProfile::ConstrainedBaseline;
                 if let Some(codec) = &codec {
-                    let _ = codec.SetValue(&CODECAPI_AVEncH264CABACEnable, &VARIANT::from(profile_idc != 66));
+                    if cabac && codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32)).is_err() {
+                        continue;
+                    }
+                    let _ = codec.SetValue(&CODECAPI_AVEncH264CABACEnable, &VARIANT::from(cabac));
                 }
                 let output = Self::media_type(size, fps, &MFVideoFormat_H264)?;
                 output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
-                output.SetUINT32(&MF_MT_MPEG2_PROFILE, profile_idc)?;
-                match transform.SetOutputType(0, &output, 0) {
-                    Ok(()) => {
-                        chosen_profile = Some(profile_idc);
-                        break;
-                    }
-                    Err(err) => last_err = Some(err),
+                output.SetUINT32(&MF_MT_MPEG2_PROFILE, profile.0 as u32)?;
+                output.SetUINT32(&MF_MT_MPEG2_LEVEL, u32::from(format.level))?;
+                if transform.SetOutputType(0, &output, 0).is_ok() {
+                    chosen = Some(format);
+                    break;
                 }
             }
-            if chosen_profile.is_none() {
-                return Err(last_err.unwrap_or_else(windows::core::Error::from_thread));
-            }
+            let format = chosen.ok_or_else(|| windows::core::Error::from_hresult(MF_E_INVALIDMEDIATYPE))?;
             let input = Self::media_type(size, fps, &MFVideoFormat_NV12)?;
             input.SetUINT32(&MF_MT_DEFAULT_STRIDE, size.0)?;
             input.SetUINT32(&MF_MT_SAMPLE_SIZE, size.0 * size.1 * 3 / 2)?;
@@ -201,7 +209,7 @@ impl Encoder {
             transform.SetInputType(0, &input, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok((codec, if asynchronous { Some(transform.cast()?) } else { None }))
+            Ok((codec, if asynchronous { Some(transform.cast()?) } else { None }, format))
         }
     }
     unsafe fn media_type(size: (u32, u32), fps: u32, subtype: &GUID) -> windows::core::Result<IMFMediaType> {
@@ -237,7 +245,13 @@ impl Encoder {
         }
         self.wide_rate_limit = wide;
         if let Some(codec) = &self.codec {
-            let target = if wide { bitrate.saturating_mul(2).min(24_000_000) } else { bitrate };
+            let cap = match self.format.level {
+                0..=30 => bitrate,
+                31 => 14_000_000,
+                32..=40 => 20_000_000,
+                _ => 24_000_000,
+            };
+            let target = if wide { bitrate.saturating_mul(2).min(cap) } else { bitrate };
             let buffer = if wide { bitrate / 4 } else { bitrate / 8 * 5 / 4 };
             unsafe {
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(target));
@@ -371,9 +385,8 @@ impl Encoder {
                         break;
                     }
                     if error.code() == MF_E_TRANSFORM_STREAM_CHANGE {
-                        // This stream negotiated baseline H.264 at a fixed
-                        // size. An arbitrary driver-preferred type can violate
-                        // that contract. Recover through the software encoder.
+                        // A driver-preferred type can violate the negotiated
+                        // codec or dimensions. Reopen a compatible encoder.
                         return Err(
                             "The Windows encoder changed its video format. Try HD text if this continues.".into()
                         );
@@ -404,9 +417,9 @@ impl Encoder {
                 };
                 let _ = buffer.Unlock();
                 let data = data.ok_or("This video picture is too large. Choose Save battery and try again.")?;
-                let mut data = pixels::annex_b(&data).ok_or("Windows returned an unsupported H.264 picture.")?;
-                let key = pixels::has_nal(&data, 5);
-                if key && (!pixels::has_nal(&data, 7) || !pixels::has_nal(&data, 8)) {
+                let mut data = crate::h264::annex_b(&data).ok_or("Windows returned an unsupported H.264 picture.")?;
+                let key = crate::h264::has_nal(&data, 5);
+                if key && (!crate::h264::has_nal(&data, 7) || !crate::h264::has_nal(&data, 8)) {
                     if self.sequence.is_empty() {
                         let media = self
                             .transform
@@ -417,8 +430,8 @@ impl Encoder {
                         {
                             let mut header = vec![0; length as usize];
                             if media.GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut header, None).is_ok() {
-                                self.sequence = pixels::annex_b(&header)
-                                    .filter(|header| pixels::has_nal(header, 7) && pixels::has_nal(header, 8))
+                                self.sequence = crate::h264::annex_b(&header)
+                                    .filter(|header| crate::h264::has_nal(header, 7) && crate::h264::has_nal(header, 8))
                                     .unwrap_or_default();
                             }
                         }
@@ -429,6 +442,12 @@ impl Encoder {
                     let mut combined = self.sequence.clone();
                     combined.extend_from_slice(&data);
                     data = combined;
+                }
+                if crate::h264::h264_sequence_profiles(&data).any(|id| {
+                    !id.and_then(DisplayVideoFormat::from_profile_level_id)
+                        .is_some_and(|sequence| self.format.accepts(sequence))
+                }) {
+                    return Err("The Windows encoder changed the negotiated H.264 profile or level.".into());
                 }
                 if data.len() > 1024 * 1024 {
                     return Err("This video picture is too large. Choose Save battery and try again.".into());
@@ -475,7 +494,12 @@ pub(crate) fn self_test() -> Result<()> {
             .ok()
             .map_err(|_| "Could not initialize the video test.")?;
         let result = (|| {
-            let mut encoder = Encoder::software((320, 180), 15, 400_000, DisplayProfile::ConstrainedBaseline)?;
+            let mut encoder = Encoder::software(
+                (320, 180),
+                15,
+                400_000,
+                &[DisplayVideoFormat { profile: DisplayProfile::ConstrainedBaseline, level: 31 }],
+            )?;
             let mut image = vec![0; 320 * 180 * 4];
             for (i, p) in image.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 p.copy_from_slice(&[if i % 320 < 160 { 255 } else { 0 }, 128, 64, 255]);
@@ -491,7 +515,7 @@ pub(crate) fn self_test() -> Result<()> {
                 if encoder
                     .output()?
                     .iter()
-                    .any(|(data, _, key)| *key && pixels::has_nal(data, 7) && pixels::has_nal(data, 8))
+                    .any(|(data, _, key)| *key && crate::h264::has_nal(data, 7) && crate::h264::has_nal(data, 8))
                 {
                     return Ok(());
                 }

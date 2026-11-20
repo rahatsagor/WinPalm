@@ -185,12 +185,40 @@ pub trait HostDelegate: Send + Sync {
     fn display_command(&self, session: u64, command: DisplayCommand);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DisplayProfile {
-    #[default]
     ConstrainedBaseline,
     Main,
+    High,
     ConstrainedHigh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayVideoFormat {
+    pub profile: DisplayProfile,
+    pub level: u8,
+}
+
+impl DisplayVideoFormat {
+    pub(crate) fn from_profile_level_id(id: u32) -> Option<Self> {
+        let [_, profile, constraints, level] = id.to_be_bytes();
+        let profile = match profile {
+            0x42 if constraints & 0x4f == 0x40 => DisplayProfile::ConstrainedBaseline,
+            0x4d if constraints & 0x8f == 0x80 => DisplayProfile::ConstrainedBaseline,
+            0x58 if constraints & 0xcf == 0xc0 => DisplayProfile::ConstrainedBaseline,
+            0x4d if constraints & 0xaf == 0 => DisplayProfile::Main,
+            0x64 if constraints == 0 => DisplayProfile::High,
+            0x64 if constraints == 0x0c => DisplayProfile::ConstrainedHigh,
+            _ => return None,
+        };
+        // Desktop capture requires at least Level 1.2. This also excludes
+        // Level 1b, whose profile-level-id encodes it out of numerical order.
+        matches!(level, 12 | 13 | 20..=22 | 30..=32 | 40..=42 | 50..=52 | 60..=62).then_some(Self { profile, level })
+    }
+
+    pub(crate) fn accepts(self, sequence: Self) -> bool {
+        self.profile == sequence.profile && sequence.level <= self.level
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,7 +234,7 @@ pub enum DisplayCommand {
         bitrate: u32,
         original: bool,
         patches: bool,
-        profile: DisplayProfile,
+        video_formats: Vec<DisplayVideoFormat>,
     },
     Configure {
         generation: u64,

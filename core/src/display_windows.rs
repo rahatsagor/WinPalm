@@ -15,8 +15,8 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::core::Interface;
 
-use crate::api::{DisplayCommand, DisplayProfile};
-use crate::display_capture_state::{CaptureBucket, Gate, IdleRefinement};
+use crate::api::{DisplayCommand, DisplayVideoFormat};
+use crate::display_capture_state::{CaptureBucket, Gate, IdleRefinement, capture_deadline};
 use crate::display_pixels as pixels;
 use crate::host::CoreHost;
 use crate::protocol::DisplayInfo;
@@ -122,7 +122,7 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
                             bitrate,
                             original,
                             patches,
-                            profile,
+                            video_formats,
                         } => {
                             if !gate.current(generation) || !host.display_capture_active(job.session, generation) {
                                 continue;
@@ -137,7 +137,7 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
                                 bitrate,
                                 original,
                                 patches,
-                                profile,
+                                video_formats,
                                 software_only: false,
                             };
                             match Capture::new(job.host, settings) {
@@ -164,6 +164,7 @@ fn worker(rx: mpsc::Receiver<Job>, gate: Arc<Gate>, refresh: Arc<AtomicBool>) {
                         DisplayCommand::KeyFrame { generation } => {
                             if let Some(capture) = active.as_mut().filter(|c| c.settings.generation == generation) {
                                 capture.keyframe = true;
+                                capture.cancel_refinement();
                             }
                         }
                         DisplayCommand::Focus { generation } => {
@@ -351,7 +352,7 @@ struct Settings {
     bitrate: u32,
     original: bool,
     patches: bool,
-    profile: DisplayProfile,
+    video_formats: Vec<DisplayVideoFormat>,
     software_only: bool,
 }
 
@@ -395,6 +396,7 @@ struct Capture {
     keyframe: bool,
     pending: bool,
     pending_since: Instant,
+    last_normal_input: Option<u64>,
     next: Instant,
     began: Instant,
     first_frame_deadline: Instant,
@@ -403,25 +405,14 @@ struct Capture {
     _power: power::KeepAwake,
 }
 impl Capture {
+    fn deadline(&self) -> Instant {
+        capture_deadline(self.next, self.original_retry_at, self.refinement.next_due())
+    }
     fn next_wake(&self, now: Instant) -> Duration {
-        let mut wake = self.next.saturating_duration_since(now).min(Duration::from_millis(250));
-        if let Some(retry) = self.original_retry_at {
-            wake = wake.min(retry.saturating_duration_since(now));
-        }
-        if !self.settings.original {
-            if let Some(due) = self.refinement.next_due() {
-                wake = wake.min(due.saturating_duration_since(now));
-            }
-            if self.pending && !self.keyframe {
-                wake = wake.min(self.bucket.wait_duration(now));
-            }
-        }
-        wake
+        self.deadline().saturating_duration_since(now).min(Duration::from_millis(250))
     }
     fn should_tick(&self, now: Instant) -> bool {
-        now >= self.next
-            || self.original_retry_at.is_some_and(|retry| now >= retry)
-            || (!self.settings.original && self.refinement.is_due(now))
+        now >= self.deadline()
     }
     fn new(host: Weak<CoreHost>, mut settings: Settings) -> Result<Self> {
         let mut timer = crate::input::windows::TimerResolution::default();
@@ -454,9 +445,9 @@ impl Capture {
             let encoder = if settings.original {
                 None
             } else if settings.software_only {
-                Some(Encoder::software(size, settings.fps, settings.bitrate, settings.profile)?)
+                Some(Encoder::software(size, settings.fps, settings.bitrate, &settings.video_formats)?)
             } else {
-                Some(Encoder::new(size, settings.fps, settings.bitrate, settings.profile)?)
+                Some(Encoder::new(size, settings.fps, settings.bitrate, &settings.video_formats)?)
             };
             settings.software_only |= encoder.as_ref().is_some_and(|e| !e.hardware());
             let now = Instant::now();
@@ -494,6 +485,7 @@ impl Capture {
                 keyframe: true,
                 pending: false,
                 pending_since: now,
+                last_normal_input: None,
                 next: now,
                 began: now,
                 first_frame_deadline: now + Duration::from_secs(10),
@@ -522,10 +514,7 @@ impl Capture {
                 self.pending = true;
                 self.picture_dirty = true;
                 self.record_damage(dirty);
-                self.refinement.cancel();
-                if let Some(encoder) = &mut self.encoder {
-                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
-                }
+                self.cancel_refinement();
             }
             AcquireUpdate::Desktop { dirty } => {
                 if !self.pending {
@@ -535,10 +524,7 @@ impl Capture {
                 self.background_dirty = true;
                 self.picture_dirty = true;
                 self.record_damage(dirty);
-                self.refinement.cancel();
-                if let Some(encoder) = &mut self.encoder {
-                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
-                }
+                self.cancel_refinement();
             }
         }
         if !gate.current(self.settings.generation)
@@ -689,13 +675,14 @@ impl Capture {
             let hardware = self.encoder.as_ref().is_some_and(Encoder::hardware);
             self.encoder = None;
             self.encoder = Some(if hardware {
-                Encoder::new(self.size, fps, bitrate, self.settings.profile)?
+                Encoder::new(self.size, fps, bitrate, &self.settings.video_formats)?
             } else {
-                Encoder::software(self.size, fps, bitrate, self.settings.profile)?
+                Encoder::software(self.size, fps, bitrate, &self.settings.video_formats)?
             });
             self.settings.software_only |= self.encoder.as_ref().is_some_and(|e| !e.hardware());
             self.bucket.reset(fps, now);
-            self.refinement.cancel();
+            self.cancel_refinement();
+            self.last_normal_input = None;
             self.keyframe = true;
             self.pending = !self.picture.is_empty();
             self.pending_since = now;
@@ -711,8 +698,13 @@ impl Capture {
         Ok(())
     }
     fn fallback_encoder(&mut self) -> Result<bool> {
-        if !self.encoder.as_ref().is_some_and(Encoder::hardware) {
-            return Ok(false);
+        let Some(previous) = self.encoder.as_ref() else { return Ok(false) };
+        if !previous.hardware() {
+            let format = previous.format();
+            if !self.settings.video_formats.iter().any(|candidate| *candidate != format) {
+                return Ok(false);
+            }
+            self.settings.video_formats.retain(|candidate| *candidate != format);
         }
         // Some hardware drivers accept the media type but reject system-memory
         // samples or stall on their first picture. Recover within the same RTP
@@ -720,10 +712,11 @@ impl Capture {
         let now = Instant::now();
         self.encoder = None;
         self.encoder =
-            Some(Encoder::software(self.size, self.settings.fps, self.settings.bitrate, self.settings.profile)?);
+            Some(Encoder::software(self.size, self.settings.fps, self.settings.bitrate, &self.settings.video_formats)?);
         self.settings.software_only = true;
         self.bucket.reset(self.settings.fps, now);
-        self.refinement.cancel();
+        self.cancel_refinement();
+        self.last_normal_input = None;
         self.keyframe = true;
         self.pending = true;
         self.pending_since = now;
@@ -750,7 +743,7 @@ impl Capture {
                 if wants_refinement {
                     encoder.set_wide_rate_limit(true, self.settings.bitrate);
                     if encoder.input(&self.video_picture, timestamp, false)? {
-                        self.refinement.mark_started();
+                        self.refinement.mark_started(timestamp, now);
                     }
                 } else {
                     encoder.set_wide_rate_limit(false, self.settings.bitrate);
@@ -758,49 +751,71 @@ impl Capture {
                         // Keep requesting an IDR until it actually reaches the phone.
                         // A driver may drop an accepted input under rate control.
                         self.pending = false;
+                        self.last_normal_input = Some(timestamp);
                         self.bucket.spend(now);
                     }
                 }
+            }
+        }
+        if self.refinement.is_due(now) {
+            if wants_refinement {
+                // A refused submission or missing input credit uses one retry.
+                self.finish_refinement(now, None);
+            } else {
+                self.cancel_refinement();
             }
         }
         let frames = {
             let Some(encoder) = &mut self.encoder else { return Ok(()) };
             encoder.output()?
         };
-        let small_frame_size = (self.settings.bitrate as usize / 8 / 4).max(16 * 1024);
         for (data, time, key) in frames {
             if !gate.current(self.settings.generation) {
                 break;
             }
             let encoded_len = data.len();
-            let was_refinement = self.refinement.in_flight;
             if host.display_frame(self.settings.session, self.settings.generation, data, time, key) {
                 self.sent = true;
                 if key {
                     self.keyframe = false;
                 }
                 let finished = Instant::now();
-                if was_refinement {
-                    if self.refinement.should_continue(Some(encoded_len), small_frame_size) {
-                        self.refinement.schedule_next(finished, self.settings.fps);
-                    } else if let Some(encoder) = &mut self.encoder {
-                        encoder.set_wide_rate_limit(false, self.settings.bitrate);
-                    }
-                } else {
-                    if let Some(encoder) = &mut self.encoder {
-                        encoder.set_wide_rate_limit(false, self.settings.bitrate);
-                    }
+                if self.refinement.matches(time) {
+                    self.finish_refinement(finished, Some(encoded_len));
+                } else if self.last_normal_input == Some(time) {
+                    self.last_normal_input = None;
                     self.refinement.schedule_initial(finished);
                 }
             } else {
                 self.keyframe = true;
-                self.refinement.cancel();
-                if let Some(encoder) = &mut self.encoder {
-                    encoder.set_wide_rate_limit(false, self.settings.bitrate);
-                }
+                self.cancel_refinement();
             }
         }
+        let finished = Instant::now();
+        if let Some(timestamp) = self.refinement.expired(finished) {
+            if let Some(encoder) = &mut self.encoder {
+                encoder.retire_input(timestamp);
+            }
+            self.finish_refinement(finished, None);
+        }
         Ok(())
+    }
+    fn finish_refinement(&mut self, now: Instant, bytes: Option<usize>) {
+        let small_frame_size = (self.settings.bitrate as usize / 8 / 4).max(16 * 1024);
+        if self.refinement.should_continue(bytes, small_frame_size) {
+            self.refinement.schedule_next(now, self.settings.fps);
+        } else if let Some(encoder) = &mut self.encoder {
+            encoder.set_wide_rate_limit(false, self.settings.bitrate);
+        }
+    }
+    fn cancel_refinement(&mut self) {
+        let cancelled = self.refinement.cancel();
+        if let Some(encoder) = &mut self.encoder {
+            if let Some(timestamp) = cancelled {
+                encoder.retire_input(timestamp);
+            }
+            encoder.set_wide_rate_limit(false, self.settings.bitrate);
+        }
     }
     fn prepare_picture(&mut self) -> Result<()> {
         if !self.picture_dirty {

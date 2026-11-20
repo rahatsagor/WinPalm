@@ -33,8 +33,11 @@ impl EncoderQueue {
         debug_assert!(self.ready());
         self.pending.push_back((timestamp, now));
     }
+    pub(crate) fn retire(&mut self, timestamp: u64) {
+        self.pending.retain(|(time, _)| *time != timestamp);
+    }
     pub(crate) fn completed(&mut self, timestamp: u64) {
-        // Baseline H.264 has no B frames. A newer output also retires older
+        // The encoder is configured without B frames. A newer output also retires older
         // inputs dropped by rate control; event-only output retires nothing.
         while self.pending.front().is_some_and(|(time, _)| *time <= timestamp) {
             self.pending.pop_front();
@@ -43,6 +46,15 @@ impl EncoderQueue {
     pub(crate) fn stalled(&self, now: Instant) -> bool {
         self.pending.front().is_some_and(|(_, since)| now.duration_since(*since) > Duration::from_secs(5))
     }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn capture_deadline(
+    next_capture: Instant,
+    hd_retry: Option<Instant>,
+    refinement: Option<Instant>,
+) -> Instant {
+    hd_retry.into_iter().chain(refinement).fold(next_capture, Instant::min)
 }
 
 /// Token bucket pacing captures at the active frame rate while keeping a
@@ -105,26 +117,28 @@ pub(crate) struct IdleRefinement {
     attempts: u8,
     first_encoded_size: Option<usize>,
     next_due: Option<Instant>,
-    pub(crate) in_flight: bool,
+    in_flight: Option<(u64, Instant)>,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
 impl IdleRefinement {
-    pub(crate) const INITIAL_DELAY: Duration = Duration::from_millis(180);
+    const INITIAL_DELAY: Duration = Duration::from_millis(180);
+    const OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
 
-    pub(crate) fn cancel(&mut self) {
+    pub(crate) fn cancel(&mut self) -> Option<u64> {
+        let cancelled = self.in_flight.take().map(|(time, _)| time);
         self.attempts = 0;
         self.first_encoded_size = None;
         self.next_due = None;
-        self.in_flight = false;
+        cancelled
     }
 
     pub(crate) fn next_due(&self) -> Option<Instant> {
-        (!self.in_flight).then_some(self.next_due).flatten()
+        self.next_due
     }
 
     pub(crate) fn is_due(&self, now: Instant) -> bool {
-        !self.in_flight && self.next_due.is_some_and(|due| now >= due)
+        self.next_due.is_some_and(|due| now >= due)
     }
 
     pub(crate) fn schedule_initial(&mut self, now: Instant) {
@@ -133,15 +147,23 @@ impl IdleRefinement {
         self.next_due = Some(now + Self::INITIAL_DELAY);
     }
 
-    pub(crate) fn mark_started(&mut self) {
-        self.in_flight = true;
+    pub(crate) fn mark_started(&mut self, timestamp: u64, now: Instant) {
+        self.in_flight = Some((timestamp, now + Self::OUTPUT_TIMEOUT));
         self.next_due = None;
+    }
+
+    pub(crate) fn matches(&self, timestamp: u64) -> bool {
+        self.in_flight.is_some_and(|(input, _)| input == timestamp)
+    }
+
+    pub(crate) fn expired(&self, now: Instant) -> Option<u64> {
+        self.in_flight.filter(|(_, deadline)| now >= *deadline).map(|(timestamp, _)| timestamp)
     }
 
     /// A dropped frame still uses one of the three attempts for this idle image.
     /// Returns `true` when another refinement pass should be scheduled.
     pub(crate) fn should_continue(&mut self, bytes: Option<usize>, small_frame_size: usize) -> bool {
-        self.in_flight = false;
+        self.in_flight = None;
         self.attempts = self.attempts.saturating_add(1);
         if self.attempts >= 3 {
             self.next_due = None;
@@ -237,6 +259,48 @@ mod tests {
         bucket.spend(later);
         assert!(!bucket.ready(later));
         assert!(bucket.wait_duration(later) > Duration::from_millis(32));
+    }
+
+    #[test]
+    fn capture_deadline_keeps_pending_video_on_the_poll_cadence() {
+        let now = Instant::now();
+        let next = now + Duration::from_millis(16);
+        // Available bucket credit is not itself a reason to poll the encoder.
+        assert!(CaptureBucket::new(60, now).ready(now));
+        assert_eq!(capture_deadline(next, None, None).duration_since(now), Duration::from_millis(16));
+        let retry = now + Duration::from_millis(6);
+        assert_eq!(capture_deadline(next, Some(retry), None), retry);
+        assert_eq!(capture_deadline(next, None, Some(retry)), retry);
+    }
+
+    #[test]
+    fn missing_idle_output_releases_only_its_credit_and_exhausts_a_bounded_retry_budget() {
+        let now = Instant::now();
+        let mut idle = IdleRefinement::default();
+        idle.schedule_initial(now);
+        let mut queue = EncoderQueue::default();
+        for attempt in 0..3 {
+            let started = idle.next_due().unwrap();
+            let timestamp = attempt + 1;
+            idle.mark_started(timestamp, started);
+            queue.accepted(timestamp, started);
+            assert_eq!(idle.expired(started + Duration::from_millis(499)), None);
+            let expired = started + Duration::from_millis(500);
+            assert_eq!(idle.expired(expired), Some(timestamp));
+            queue.retire(timestamp);
+            if idle.should_continue(None, 1024) {
+                idle.schedule_next(expired, 60);
+            }
+            assert!(!queue.stalled(expired + Duration::from_secs(6)));
+            assert!(!idle.matches(timestamp));
+        }
+        assert!(idle.next_due().is_none());
+
+        queue.accepted(10, now);
+        queue.accepted(11, now);
+        queue.retire(11);
+        assert!(queue.ready());
+        assert!(queue.stalled(now + Duration::from_secs(6)));
     }
 
     #[test]
