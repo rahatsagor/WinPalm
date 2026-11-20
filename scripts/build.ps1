@@ -52,7 +52,16 @@ try {
     }
     Run { cargo build --locked --release --target $Target }
     Run { cargo fetch --locked --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc }
-    Run { dotnet publish windows/WinPalm/WinPalm.csproj -c Release -r $Rid --self-contained true -p:RestoreLockedMode=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:CopyOutputSymbolsToPublishDirectory=false --artifacts-path (Join-Path $Cache 'dotnet') --output $Output }
+    # A native SDK can satisfy its app host from a preinstalled pack, omitting
+    # it from NuGet download metadata. Resolve all publish packs via NuGet so
+    # the notices check sees both architectures. Keep SDK pruning data in use.
+    $SdkPacks = & dotnet msbuild windows/WinPalm/WinPalm.csproj -getProperty:NetCoreTargetingPackRoot
+    if ($LASTEXITCODE -ne 0 -or !$SdkPacks) { throw 'Could not locate SDK package-pruning metadata.' }
+    $PublishPackOptions = @(
+        "-p:NetCoreTargetingPackRoot=$(Join-Path $Cache 'nuget-targeting-packs')"
+        "-p:PrunePackageTargetingPackRoots=$SdkPacks"
+    )
+    Run { dotnet publish windows/WinPalm/WinPalm.csproj -c Release -r $Rid --self-contained true -p:RestoreLockedMode=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:CopyOutputSymbolsToPublishDirectory=false --artifacts-path (Join-Path $Cache 'dotnet') @PublishPackOptions --output $Output }
     $Assets = & dotnet msbuild windows/WinPalm/WinPalm.csproj -getProperty:ProjectAssetsFile "-p:ArtifactsPath=$(Join-Path $Cache 'dotnet')"
     if ($LASTEXITCODE -ne 0) { throw 'Could not locate restored dependency metadata.' }
     Run { bun scripts/license-notices.ts --output THIRD_PARTY_NOTICES.md --nuget-assets $Assets --check }
