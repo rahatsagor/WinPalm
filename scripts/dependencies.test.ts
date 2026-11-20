@@ -24,7 +24,8 @@ afterEach(() => rmSync(directory, { recursive: true, force: true }))
 test('patched glob and minimatch keep nested file selection and EditorConfig matching', () => {
   expect(glob.hasMagic('src/**/*.js')).toBe(true)
   expect(glob.hasMagic('src/first.js')).toBe(false)
-  expect(glob.globSync('src/**/*.js', { cwd: directory }).sort()).toEqual(['src/first.js', 'src/nested/second.js'])
+  const files = [join('src', 'first.js'), join('src', 'nested', 'second.js')]
+  expect(glob.globSync('src/**/*.js', { cwd: directory }).sort()).toEqual(files)
   const config = editorconfig.parseSync(join(directory, 'src/nested/second.js'))
   expect(config.indent_style).toBe('space')
   expect(config.indent_size).toBe(2)
