@@ -25,11 +25,15 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- A small tray app doesn't need a background GC thread. -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <SystemManagementVersion>10.0.13</SystemManagementVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="QRCoder" Version="1.8.1" />
     <PackageReference Include="System.Speech" Version="10.0.13" />
-    <PackageReference Include="System.Management" Version="10.0.13" />
+    <PackageReference Include="System.Management" Version="$(SystemManagementVersion)" />
+    <!-- WinForms can supply CodeDom from its runtime pack on native Windows.
+         Restore the pinned transitive package for consistent license notices. -->
+    <PackageDownload Include="System.CodeDom" Version="[$(SystemManagementVersion)]" Condition="'$(SelfContained)' == 'true'" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Resources\WinPalm.ico" CopyToOutputDirectory="PreserveNewest" />

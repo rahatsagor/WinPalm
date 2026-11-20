@@ -105,9 +105,11 @@ function nugetNotices(assetsPath: string): string[] {
   }
   for (const framework of Object.values(assets.project.frameworks)) {
     for (const pkg of framework.downloadDependencies ?? []) {
-      if (/^Microsoft\.(?:NETCore\.App\.(?:Runtime|Host)|WindowsDesktop\.App\.Runtime)\.win-(?:x64|arm64)$/i.test(pkg.name)) {
+      if (pkg.name === 'System.CodeDom' || /^Microsoft\.(?:NETCore\.App\.(?:Runtime|Host)|WindowsDesktop\.App\.Runtime)\.win-(?:x64|arm64)$/i.test(pkg.name)) {
         const match = pkg.version.match(/^\[([^,\]]+),\s*\1\]$/)
-        if (!match) throw new Error(`Unpinned runtime: ${pkg.name}`)
+        if (!match) throw new Error(`Unpinned package download: ${pkg.name}`)
+        const resolved = packages.get(pkg.name)
+        if (resolved && resolved !== match[1]) throw new Error(`Inconsistent restored versions for ${pkg.name}`)
         packages.set(pkg.name, match[1]!)
       }
     }
